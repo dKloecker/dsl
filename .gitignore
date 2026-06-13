@@ -1,0 +1,75 @@
+### C++ template
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+
+# CMake build output
+build/
+cmake-build-*/
+out/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+CMakeUserPresets.json
+cmake_install.cmake
+install_manifest.txt
+Makefile
+*.cmake
+!CMakeLists.txt
+compile_commands.json
+.ninja_deps
+.ninja_log
+build.ninja
+
+# CTest / GoogleTest discovery
+Testing/
+*_tests[[*]]_tests.cmake
+CTestTestfile.cmake
+
+# Google Benchmark output
+benchmark_logs/
+*.json
+
+# vcpkg
+vcpkg_installed/
+vcpkg-manifest-install.log
+
+# IDE / editor scratch
+.idea/*
+!.idea/codeStyles/
+!.idea/editor.xml
+.vs/
+.vscode/
+*.swp
+*.swo
+.DS_Store
