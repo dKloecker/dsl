@@ -13,6 +13,7 @@ option(DSL_BUILD_BENCHMARKS "Build benchmarks" ${PROJECT_IS_TOP_LEVEL})
 add_library(dsl STATIC
         dsl/logging/dsl_async_logger.cpp
         dsl/logging/dsl_logger_utils.cpp
+        dsl/core/threading/dsl_thread_pool.cpp
 )
 target_include_directories(dsl PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 

@@ -11,7 +11,6 @@ constexpr size_t align_up(const size_t size, const size_t alignment) {
     return ((size + alignment - 1) / alignment) * alignment;
 }
 
-
 constexpr size_t round_up_pow2(size_t v) {
     v--;
     v |= v >> 1;
@@ -22,6 +21,16 @@ constexpr size_t round_up_pow2(size_t v) {
     v |= v >> 32;
     return v + 1;
 }
+
+template <size_t N, size_t E>
+constexpr size_t power_of() {
+	if constexpr (E == 0) {
+		return 1;
+	} else {
+		return N * power_of<N, E - 1>();
+	}
+}
+
 }
 
 #endif //DSL_UTIL_H
