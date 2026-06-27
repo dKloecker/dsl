@@ -16,13 +16,15 @@ namespace dsl {
  *
  * Pre-allocates blocks of memory divided into fixed-size chunks.
  * Blocks grow on demand and are never moved, so pointers into the pool
- * remain stable for the allocator's lifetime.
+ * remain stable for the allocator's lifetime, after which the resource will be returned
+ * to its upstream.
  *
  * Configured through construction via @c pool_options struct
  * The final chunk size may be larger than requested, depending on the alignment.
  * But all chunks are guaranteed to be compatible with the requested alignment.
  */
 class fixed_size_pool_resource : public std::pmr::memory_resource {
+	struct Block;
 public:
 	struct pool_options {
 		size_t chunk_size;
@@ -32,28 +34,52 @@ public:
 
 	/**
 	 * @param opts Options for the desired pool configuration
+	 * @param upstream upstream memory resource from which memory is obtained.
 	 * @throws std::invalid_argument if invalid chunks_per_block
 	 * @throws std::invalid_argument if invalid alignment provided
 	 */
-	explicit fixed_size_pool_resource(const pool_options &opts)
-		: options_{
-			.chunk_size       = align_up(std::max(opts.chunk_size, sizeof(void *)), opts.alignment),
-			.chunks_per_block = opts.chunks_per_block,
-			.alignment        = opts.alignment
-		} {
-		if (opts.chunks_per_block == 0) throw std::invalid_argument("chunks_per_block must be greater than zero");
-		if (opts.alignment == 0) throw std::invalid_argument("alignment must be greater than zero");
-		allocate_new_block();
-	}
+		explicit fixed_size_pool_resource(
+			const pool_options &opts,
+			std::pmr::memory_resource* upstream = std::pmr::get_default_resource()
+		)
+			: options_{
+				.chunk_size       = align_up(std::max(opts.chunk_size, sizeof(void *)), std::max(alignof(Block), opts.alignment)),
+				.chunks_per_block = opts.chunks_per_block,
+				.alignment        = std::max(alignof(Block), opts.alignment)
+			}
+			, upstream_(upstream) {
+			if (opts.chunks_per_block == 0) throw std::invalid_argument("chunks_per_block must be greater than zero");
+			if (opts.alignment == 0) throw std::invalid_argument("alignment must be greater than zero");
+			allocate_new_block();
+		}
 
-	fixed_size_pool_resource(fixed_size_pool_resource &&) = default;
+	fixed_size_pool_resource(fixed_size_pool_resource && other) noexcept
+		: options_(other.options_)
+		, upstream_(std::exchange(other.upstream_, nullptr))
+		, block_head_(std::exchange(other.block_head_, nullptr))
+		, free_(std::exchange(other.free_, nullptr))
+		{
+		}
+
 
 	fixed_size_pool_resource(const fixed_size_pool_resource &) = delete;
 
 	fixed_size_pool_resource &operator=(const fixed_size_pool_resource &) = delete;
 
+	~fixed_size_pool_resource() override {
+		Block* block = block_head_;
+		while (block != nullptr) {
+			Block* next = block->next;
+			// End Block life time, and free from upstream resource.
+			block->~Block();
+			upstream_->deallocate(block, total_block_size(), options_.alignment);
+			block = next;
+		}
+		free_ = nullptr; // Reset to nullptr, as it belonged to one of the de-allocated block
+	}
+
 private:
-	/** Options Provided to Pool Resource */
+	/** Options Provided to Pool Resource must remain fixed once constructed */
 	const pool_options options_;
 
 	/**
@@ -65,30 +91,18 @@ private:
 		Chunk *next = nullptr;
 	};
 
+	std::pmr::memory_resource *upstream_;
+
 
 	/**
 	 * Total bytes needed for a single over-allocated Block:
 	 * the Block header (rounded up to alignment) plus all chunk data.
 	 */
 	[[nodiscard]] size_t total_block_size() const {
-		const size_t header = align_up(sizeof(Block), options_.alignment);
-		return header + options_.chunks_per_block * options_.chunk_size;
-	}
 
-	// Forward declaration required for BlockDeleter
-	struct Block;
-	/**
-	 * Custom deleter for over-allocated Blocks.
-	 * Required because the allocation size exceeds @c sizeof(Block),
-	 * Explicitly invoke the destructor to clean up the owned next pointer
-	 * before returning the raw memory to @c std::free.
-	 */
-	struct BlockDeleter {
-		void operator()(Block *b) const noexcept {
-			b->~Block();
-			std::free(b);
-		}
-	};
+		const size_t header = align_up(sizeof(Block), options_.alignment);
+		return header + (options_.chunks_per_block * options_.chunk_size);
+	}
 
 	/**
 	 * A contiguous block of memory divided into a fixed number of chunks.
@@ -102,52 +116,22 @@ private:
 	 * @endcode
 	 */
 	struct Block {
-		// TODO: Maybe keep track of alignment in here?
-		using unique_block_ptr = std::unique_ptr<Block, BlockDeleter>;
-		unique_block_ptr next  = {};
+		Block *	next;
+		const std::size_t block_alignment;
 
 		/**
 		 * Returns a pointer to the start of the aligned chunk data region.
 		 */
-		std::byte *data(const size_t alignment) {
+		std::byte *data() {
 			// Address past header
 			const auto addr = reinterpret_cast<uintptr_t>(this) + sizeof(Block);
 			// Address past aligned header (including padding)
-			return reinterpret_cast<std::byte *>(align_up(addr, alignment));
-		}
-
-		/**
-		 * Placement operator new. Allocates `total_size` bytes (header and chunk data)
-		 * @param total_size actual size allocated
-		 * @throws std::bad_alloc on allocation failure
-		 */
-		[[nodiscard]] void *operator new(const size_t _, const size_t total_size) {
-			void *p = std::aligned_alloc(alignof(Block), total_size);
-			if (!p) throw std::bad_alloc{};
-			return p;
-		}
-
-		/** Matching placement delete, called only if the Block constructor throws. */
-		void operator delete(void *p, size_t) noexcept {
-			std::free(p);
-		}
-
-		/** Normally delete. Required by the language but should not be called directly. */
-		void operator delete(void *p) noexcept {
-			std::free(p);
-		}
-
-		/**
-		 * Utility to create @c unique_ptr, since make_unique cannot be used due to overallocation
-		 */
-		[[nodiscard]] static unique_block_ptr make_unique(const size_t total_size) {
-			auto *b = new(total_size) Block();
-			return unique_block_ptr(b);
+			return reinterpret_cast<std::byte *>(align_up(addr, block_alignment));
 		}
 	};
 
 	/** Owns all allocated blocks. New blocks are prepended here. */
-	Block::unique_block_ptr block_head_ = nullptr;
+	Block* block_head_ = nullptr;
 
 	/** Head of the free list. The next allocation is served from here. */
 	Chunk *free_ = nullptr;
@@ -159,8 +143,14 @@ private:
 	 * @throws std::bad_alloc on failed allocation of new Block
 	 */
 	void allocate_new_block() {
-		auto   block = Block::make_unique(total_block_size());
-		auto * head  = reinterpret_cast<Chunk *>(block->data(options_.alignment));
+		// Retrieve aligned data from upstream resource
+		void* raw = upstream_->allocate(
+			total_block_size(),
+			options_.alignment);
+
+		auto* block  = ::new (raw) Block{.next = nullptr, .block_alignment = options_.alignment};
+
+		auto * head  = reinterpret_cast<Chunk *>(block->data());
 		Chunk *tail  = head;
 
 		for (size_t c = 0; c < options_.chunks_per_block - 1; c++) {
@@ -169,8 +159,9 @@ private:
 		}
 		tail->next = nullptr;
 
-		block->next = std::move(block_head_);
-		block_head_ = std::move(block);
+		// Link to previous head and make new head of allocated blocklist
+		block->next = block_head_;
+		block_head_ = block;
 		free_       = head;
 	}
 
@@ -180,8 +171,9 @@ private:
 	 * the configured alignment.
 	 * @throws std::bad_alloc when failing to grow if required or incompatible size.
 	 */
-	[[nodiscard]] void *do_allocate(const size_t bytes, size_t) override {
+	[[nodiscard]] void *do_allocate(const size_t bytes, size_t alignment) override {
 		if (bytes > options_.chunk_size) throw std::bad_alloc{};
+		// TODO: Debug assert? if (alignment < options_.alignment) throw std::bad_alloc{};
 		if (!free_) allocate_new_block();
 
 		Chunk *chunk = free_;
@@ -233,7 +225,8 @@ class static_fixed_size_pool_resource : public fixed_size_pool_resource {
 public:
 	static constexpr pool_options options = make_options();
 
-	static_fixed_size_pool_resource() : fixed_size_pool_resource(options) {}
+	explicit static_fixed_size_pool_resource(
+		std::pmr::memory_resource* upstream = std::pmr::new_delete_resource()) : fixed_size_pool_resource(options, upstream) {}
 };
 }
 

@@ -42,29 +42,16 @@ public:
 
 	/**
 	 * @param opts Options for the desired pool configuration
-	 * @param upstream Upstream resource used for requests exceeding
-	 *        @c largest_required_chunk
+	 * @param upstream Backing memory resource providing memory.
+	 *		  Allocations exceeding @c largest_required_chunk will be served from upstream
 	 */
-	explicit pool_resource(const pool_options &opts, std::pmr::memory_resource *upstream)
+	explicit pool_resource(const pool_options &opts, std::pmr::memory_resource *upstream = std::pmr::get_default_resource())
 		: options_{
 			.max_chunks_per_block   = std::clamp(opts.max_chunks_per_block, min_n_chunks, max_n_chunks),
 			.largest_required_chunk = std::clamp(opts.largest_required_chunk, min_chunk_size, max_chunk_size)
 		}
-		, pools_(create_pools(options_))
+		, pools_(create_pools(options_, upstream))
 		, upstream_(upstream) {}
-
-	/**
-	 * @param opts Options for the desired pool configuration
-	 *
-	 * Uses @c std::pmr::get_default_resource() as the upstream resource.
-	 */
-	explicit pool_resource(const pool_options &opts)
-		: options_{
-			.max_chunks_per_block   = std::clamp(opts.max_chunks_per_block, min_n_chunks, max_n_chunks),
-			.largest_required_chunk = std::clamp(opts.largest_required_chunk, min_chunk_size, max_chunk_size)
-		}
-		, pools_(create_pools(options_))
-		, upstream_(std::pmr::get_default_resource()) {}
 
 	pool_resource(const pool_resource &) = delete;
 
@@ -75,7 +62,7 @@ private:
 	const pool_options options_;
 
 	/** Backing fixed-size pools ordered by increasing chunk size */
-	std::vector<fixed_size_pool_resource> pools_;
+	std::pmr::vector<fixed_size_pool_resource> pools_;
 
 	/** Upstream resource for oversized requests */
 	std::pmr::memory_resource *upstream_;
@@ -84,7 +71,7 @@ private:
 
 	/**
 	 * Selects the resource responsible for a request of the given size.
-	 * Requests larger than @c largest_required_chunk are forwarded to
+	 * Requests larger than @c the largest_required_chunk are forwarded to
 	 * the upstream resource; all others are routed to the pool
 	 * identified by @c pool_index.
 	 */
@@ -149,17 +136,22 @@ private:
 	 * chunk size grows. All pools are constructed with alignment
 	 * @c default_alignment.
 	 */
-	[[nodiscard]] static std::vector<fixed_size_pool_resource> create_pools(const pool_options &opts) {
+	[[nodiscard]] static std::pmr::vector<fixed_size_pool_resource> create_pools(const pool_options &opts, std::pmr::memory_resource* upstream) {
 		const size_t max_size   = opts.largest_required_chunk;
 		size_t       chunk_size = min_chunk_size;
 		size_t       num_chunks = opts.max_chunks_per_block;
 
-		std::vector<fixed_size_pool_resource> pools;
+		std::pmr::vector<fixed_size_pool_resource> pools{upstream};
+		pools.reserve(pool_index(max_size) + 1);
 
-		while (chunk_size <= max_size) {
-			pools.push_back(fixed_size_pool_resource{
-				{.chunk_size = chunk_size, .chunks_per_block = num_chunks, .alignment = default_alignment}
+		// Ensure that max requested is covered in allocated pools.
+		for (;;) {
+			pools.emplace_back(
+				fixed_size_pool_resource{
+				{.chunk_size = chunk_size, .chunks_per_block = num_chunks, .alignment = default_alignment},
+				upstream
 			});
+			if (chunk_size >= max_size) break;
 			// Keep number of chunks above min always
 			num_chunks = std::max(min_n_chunks, num_chunks / chunk_n_growth);
 			chunk_size *= chunk_size_growth;

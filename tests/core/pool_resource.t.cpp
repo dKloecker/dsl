@@ -100,6 +100,7 @@ TEST(PoolResource, SizesAcrossPowerOfTwoBoundaryDoNotShare) {
 TEST(PoolResource, OversizeRequestGoesToUpstream) {
     counting_resource upstream;
     pool_resource     pool{default_options, &upstream};
+	upstream.reset(); // reset after initial
 
     // largest_required_chunk is 64 but ask for 128
     constexpr size_t oversize = 128;
@@ -115,6 +116,7 @@ TEST(PoolResource, OversizeRequestGoesToUpstream) {
 TEST(PoolResource, SmallRequestDoesNotTouchUpstream) {
     counting_resource upstream;
     pool_resource     pool{default_options, &upstream};
+	upstream.reset();
 
     void *p = pool.allocate(16);
     EXPECT_EQ(upstream.alloc_count, 0);
@@ -126,6 +128,7 @@ TEST(PoolResource, SmallRequestDoesNotTouchUpstream) {
 TEST(PoolResource, OversizeDeallocateReturnsToUpstream) {
     counting_resource upstream;
     pool_resource     pool{default_options, &upstream};
+	upstream.reset();
 
     constexpr size_t oversize = 256;
     void *           p        = pool.allocate(oversize);
@@ -139,6 +142,7 @@ TEST(PoolResource, OversizeDeallocateReturnsToUpstream) {
 TEST(PoolResource, MixedSmallAndOversizeRequests) {
     counting_resource upstream;
     pool_resource     pool{default_options, &upstream};
+	upstream.reset();
 
     auto *small1 = pool.allocate(8);
     auto *big1   = pool.allocate(200);
@@ -169,6 +173,7 @@ TEST(PoolResource, ClampsLargestRequiredChunkAboveLimit) {
     constexpr pool_resource::pool_options opts{.max_chunks_per_block = 4, .largest_required_chunk = 1 << 20};
     counting_resource                     upstream;
     pool_resource                         pool{opts, &upstream};
+	upstream.reset();
 
     // A request just above max_chunk_size should go upstream
     constexpr size_t oversize = (1 << 12) + 1;
