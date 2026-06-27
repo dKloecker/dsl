@@ -13,15 +13,17 @@
 #include <thread>
 
 #include "dsl/logging/dsl_logger_enums.h"
-#include "dsl/core/spsc_queue/dsl_spsc_queue.h"
+#include "dsl/core/spsc_queue/dsl_mpsc_queue.h"
 
 namespace dsl {
 namespace log_defaults {
 inline constexpr size_t MAX_MESSAGE_LENGTH = 1024;
-inline constexpr size_t QUEUE_CAPACITY     = 512;
-inline constexpr size_t FLUSH_THRESHOLD    = 32;
+inline constexpr size_t QUEUE_CAPACITY     = 1024;
+inline constexpr size_t FLUSH_THRESHOLD    = 64;
 }
 
+// TODO: Maybe Move behind manager
+// TODO: Add different logger so I can have logger per component maybe?
 
 /**
  * @brief A single log entry to be enqueued and written by the consumer thread
@@ -33,6 +35,7 @@ struct LogRecord {
 	std::source_location location{};
 	// TODO: use a different time system here
 	std::chrono::time_point<std::chrono::system_clock> time_stamp = std::chrono::system_clock::now();
+	std::thread::id thread_id = std::this_thread::get_id();
 };
 
 /**
@@ -57,6 +60,7 @@ struct LogConfig {
 	/**
 	 * Format String using % placeholders.
 	 * @p %T - Timestamp
+	 * @p %t - Thread ID
 	 * @p %L - Log Level
 	 * @p %f - File Name
 	 * @p %l - Line Number
@@ -95,7 +99,7 @@ class AsyncLogger {
 	std::stop_source stop_{};
 
 	char                                 stream_buffer_[STREAM_BUFFER_SIZE]{};
-	spsc_queue<LogRecord, QueueCapacity> queue_{};
+	mpsc_queue<LogRecord, QueueCapacity> queue_{};
 	std::ofstream                        log_file_{};
 
 	AsyncLogger() = default;

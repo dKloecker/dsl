@@ -38,6 +38,10 @@ inline void write_log(std::ostream &out, const std::string &format, const LogRec
                     out << record.location.file_name();
                     break;
                 }
+            	case 't': {
+	                out << record.thread_id;
+                	break;
+                }
                 case 'l': {
                     out << record.location.line();
                     break;

@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <barrier>
 
 #include "dsl/logging/dsl_async_logger.h"
 #include "dsl/logging/dsl_logger_enums.h"
@@ -256,4 +257,70 @@ TEST_F(AsyncLoggerTest, BlockPolicyBlocksUntilProcessed) {
 
     EXPECT_EQ(line_count, num_records);
 }
+
+TEST_F(AsyncLoggerTest, MultipleThreadsLoggingAtTheSameTime) {
+    const LogConfig cfg{
+       .min_log_file_level   = LogLevel::e_DEBUG,
+       .log_file             = log_path,
+       .format               = "%t", // Expecting thread ID
+       .back_pressure_policy = BackPressurePolicy::e_BLOCK,
+       .drop_threshold       = LogLevel::e_DEBUG
+    };
+
+    AsyncLogger<>::instance().init(cfg);
+
+    const size_t num_threads = 10;
+    const size_t msgs_per_thread = 100;
+
+    std::mutex mtx;
+    std::barrier sync(num_threads);
+    std::vector<std::jthread> threads;
+    std::set<std::thread::id> ids;
+
+    threads.reserve(num_threads);
+
+    for (int i = 0; i < num_threads; i++) {
+       threads.emplace_back([&]() {
+          {
+             // Record thread ID
+             std::scoped_lock<std::mutex> lck{mtx};
+             ids.insert(std::this_thread::get_id());
+          }
+
+          // Wait until all threads are spun up and recorded
+          sync.arrive_and_wait();
+       	  // Spam logger
+          for (int j = 0; j < msgs_per_thread; ++j) {
+                 AsyncLogger<>::instance().info("message");
+          }
+       });
+    }
+
+	// Wait for all threads to finish logging before the shutdown is done.
+    threads.clear();
+    AsyncLogger<>::instance().reset();
+
+    // Verify the log file contents
+    std::ifstream log_file(log_path);
+    int           line_count = 0;
+    std::string   line;
+    std::set<std::string> logged_thread_ids;
+
+    while (std::getline(log_file, line)) {
+       ++line_count;
+       // Assuming "%t" formats the line to be exactly the thread ID string,
+       // or at least contains it. We collect them to ensure every thread was represented.
+       logged_thread_ids.insert(line);
+    }
+    EXPECT_EQ(line_count, num_threads * msgs_per_thread);
+    EXPECT_EQ(logged_thread_ids.size(), num_threads);
+
+	// Ensure the ids were captured correctly
+	for (const auto& id : ids) {
+		std::stringstream ss;
+		ss << id;
+		EXPECT_TRUE(logged_thread_ids.contains(ss.str()));
+	}
+}
+
 }
