@@ -12,8 +12,9 @@
 #include <source_location>
 #include <thread>
 
-#include "dsl/logging/dsl_logger_enums.h"
 #include "dsl/core/spsc_queue/dsl_mpsc_queue.h"
+#include "dsl/logging/dsl_logger_enums.h"
+#include "dsl/startable/dsl_startable.h"
 
 namespace dsl {
 namespace log_defaults {
@@ -35,7 +36,7 @@ struct LogRecord {
 	std::source_location location{};
 	// TODO: use a different time system here
 	std::chrono::time_point<std::chrono::system_clock> time_stamp = std::chrono::system_clock::now();
-	std::thread::id thread_id = std::this_thread::get_id();
+	std::thread::id                                    thread_id  = std::this_thread::get_id();
 };
 
 /**
@@ -89,41 +90,39 @@ struct LogConfig {
  * @tparam QueueCapacity     Capacity of the underlying SPSC queue
  * @tparam FlushThreshold    Number of messages worth of stream buffer space.
  */
-template<size_t QueueCapacity = log_defaults::QUEUE_CAPACITY, size_t FlushThreshold = log_defaults::FLUSH_THRESHOLD>
-class AsyncLogger {
-	static constexpr size_t STREAM_BUFFER_SIZE = FlushThreshold * log_defaults::MAX_MESSAGE_LENGTH;
-	LoggerStatus            status_            = LoggerStatus::e_UNKNOWN;
+template<size_t QC = log_defaults::QUEUE_CAPACITY, size_t FT = log_defaults::FLUSH_THRESHOLD>
+class AsyncLogger : public lifecycle::Startable<AsyncLogger<QC, FT> > {
+	static constexpr size_t STREAM_BUFFER_SIZE = FT * log_defaults::MAX_MESSAGE_LENGTH;
 	LogConfig               config_{};
 
 	std::thread      consumer_thread_{};
 	std::stop_source stop_{};
 
-	char                                 stream_buffer_[STREAM_BUFFER_SIZE]{};
-	mpsc_queue<LogRecord, QueueCapacity> queue_{};
-	std::ofstream                        log_file_{};
+	char                      stream_buffer_[STREAM_BUFFER_SIZE]{};
+	mpsc_queue<LogRecord, QC> queue_{};
+	std::ofstream             log_file_{};
 
 	AsyncLogger() = default;
 
 	/**
-	 * Opens log file
-	 * Launches Consumer Thread
-	 * @throws std::runtime_error on file open failure
+	 * @brief lifecycle::Startable implementation
 	 */
-	void start_up();
+	[[nodiscard]] std::expected<void, lifecycle::Error> on_start();
+	[[nodiscard]] std::expected<void, lifecycle::Error> on_stop();
 
-	/**
-	 * Signals shutdown
-	 * Joins Consumer Thread
-	 * Flushes remaining records
-	 */
-	void shut_down();
+
+	friend class lifecycle::Startable<AsyncLogger<QC, FT> >;
 
 	/**
 	 * Handler for enqueuing Log Record based on Loggers configured BackPressure policy.
 	 * Defaults to void function when uninitialized
 	 */
-	using enqueue_fn            = void (*)(AsyncLogger &, const LogRecord &);
-	enqueue_fn enqueue_handler_ = nullptr;
+	using enqueue_fn = void (*)(AsyncLogger &, const LogRecord &);
+
+	// No-op sink
+	static void enqueue_none(AsyncLogger &, const LogRecord &) {}
+
+	enqueue_fn enqueue_handler_ = &enqueue_none;
 
 	static void enqueue_block(AsyncLogger &self, const LogRecord &record) {
 		while (!self.queue_.push(record)) {}
@@ -142,11 +141,13 @@ class AsyncLogger {
 	}
 
 public:
-	static constexpr size_t QUEUE_CAPACITY     = QueueCapacity;
-	static constexpr size_t FLUSH_THRESHOLD    = FlushThreshold;
+	static constexpr size_t QUEUE_CAPACITY     = QC;
+	static constexpr size_t FLUSH_THRESHOLD    = FT;
 	static constexpr size_t MAX_MESSAGE_LENGTH = log_defaults::MAX_MESSAGE_LENGTH;
 
-	~AsyncLogger();
+	~AsyncLogger() {
+		(void) this->stop();
+	}
 
 	AsyncLogger(const AsyncLogger &) = delete;
 
@@ -156,6 +157,10 @@ public:
 
 	AsyncLogger &operator=(AsyncLogger &&) = delete;
 
+	[[nodiscard]] std::expected<void, lifecycle::Error>
+	on_transition_error(const lifecycle::Error &err) override {
+		return std::unexpected{err};
+	}
 #ifdef TESTING
 	/// @brief Shuts down the logger and resets the internal state. Test-only.
 	void reset();
@@ -242,7 +247,7 @@ public:
 };
 
 /// @brief Default logger type alias.
-using Logger = AsyncLogger<512, 32>;
+using Logger = AsyncLogger<>;
 
 /// @name Convenience logging macros
 /// Support @c std::format syntax. Source location is captured automatically.
