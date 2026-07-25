@@ -9,6 +9,7 @@
 #include <new>
 #include <optional>
 #include <mutex>
+#include <shared_mutex>
 
 #include "dsl/core/concepts/dsl_concepts.h"
 #include "dsl/core/utils/dsl_util.h"
@@ -27,15 +28,19 @@ class mpsc_queue_imp {
     alignas(64) std::atomic<size_t> head_{0};
     alignas(64) std::atomic<size_t> tail_{0};
 
-    /** Maps an unbounded index to a buffer position via bitmask */
-    static constexpr size_t slot(const size_t index) {
-        return index & (Capacity - 1);
-    }
+	static constexpr size_t slot(const size_t index) {
+		return index & (Capacity - 1);
+	}
 
-    /** Returns a laundered pointer to prevent compiler optimization invalidating pointers */
-    constexpr T *at(const size_t slot) {
-        return std::launder(reinterpret_cast<T *>(buffer_) + slot);
-    }
+    /** Maps an unbounded index to a buffer position via bitmask */
+	constexpr void* raw_at(const size_t slot) {
+		return buffer_ + (slot * sizeof(T));
+	}
+
+	/** Returns a laundered pointer to prevent compiler optimization invalidating pointers */
+	T *at(const size_t slot) {
+		return std::launder(reinterpret_cast<T *>(buffer_) + slot);
+	}
 
 public:
     bool empty() const {
@@ -49,7 +54,7 @@ public:
     	// Force synchronisation with consumer
         const size_t curr = tail_.load(std::memory_order_relaxed);
         if (curr - head_.load(std::memory_order_acquire) >= Capacity) return false;
-        new(at(slot(curr))) T(data);
+        new(raw_at(slot(curr))) T(data);
         tail_.store(curr + 1, std::memory_order_release);
         return true;
     }
@@ -94,9 +99,15 @@ public:
         return at(slot(head_.load(std::memory_order_relaxed)));
     }
 
-    void reset() {
-        // Clear queue and delete any remaining elements from it
-        while (slot(head_) < slot(tail_)) at(slot(head_++))->~T();
+	void reset() {
+    	auto lock = std::scoped_lock<std::mutex>(mutex_);
+    	// Clear queue and delete any remaining elements from it
+    	size_t h = head_.load(std::memory_order_relaxed);
+    	const size_t t = head_.load(std::memory_order_relaxed);
+    	while (h != t) {
+    		at(slot(h++))->~T();
+    		head_.store(h, std::memory_order_relaxed);
+    	}
     }
 
     ~mpsc_queue_imp() {

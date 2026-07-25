@@ -17,7 +17,7 @@ class spsc_queue_imp {
     using value_type                                     = T;
     static constexpr size_t         ELEMENT_SIZE         = sizeof(T);
     static constexpr size_t         BUFFER_SIZE          = Capacity * ELEMENT_SIZE;
-    std::byte                       buffer_[BUFFER_SIZE] = {};
+    alignas(T)  std::byte           buffer_[BUFFER_SIZE] = {};
     alignas(64) std::atomic<size_t> head_{0};
     alignas(64) std::atomic<size_t> tail_{0};
 
@@ -26,8 +26,12 @@ class spsc_queue_imp {
         return index & (Capacity - 1);
     }
 
+	constexpr void* raw_at(const size_t slot) {
+	    return buffer_ + (slot * sizeof(T));
+    }
+
     /** Returns a laundered pointer to prevent compiler optimization invalidating pointers */
-    constexpr T *at(const size_t slot) {
+    T *at(const size_t slot) {
         return std::launder(reinterpret_cast<T *>(buffer_) + slot);
     }
 
@@ -40,7 +44,7 @@ public:
     bool push(const T &data) {
         const size_t curr = tail_.load(std::memory_order_relaxed);
         if (curr - head_.load(std::memory_order_acquire) >= Capacity) return false;
-        new(at(slot(curr))) T(data);
+        new(raw_at(slot(curr))) T(data);
         tail_.store(curr + 1, std::memory_order_release);
         return true;
     }
@@ -87,7 +91,12 @@ public:
 
     void reset() {
         // Clear queue and delete any remaining elements from it
-        while (slot(head_) < slot(tail_)) at(slot(head_++))->~T();
+    	size_t h = head_.load(std::memory_order_relaxed);
+    	const size_t t = head_.load(std::memory_order_relaxed);
+    	while (h != t) {
+    		at(slot(h++))->~T();
+    		head_.store(h, std::memory_order_relaxed);
+    	}
     }
 
     ~spsc_queue_imp() {
