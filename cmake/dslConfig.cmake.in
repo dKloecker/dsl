@@ -1,0 +1,6 @@
+@PACKAGE_INIT@
+
+# dsl has no external dependencies -- nothing to find_dependency() here.
+include("${CMAKE_CURRENT_LIST_DIR}/dslTargets.cmake")
+
+check_required_components(dsl)

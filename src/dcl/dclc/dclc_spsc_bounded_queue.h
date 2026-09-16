@@ -1,0 +1,125 @@
+//
+// Created by Dominic Kloecker on 31/03/2026.
+//
+#ifndef DSL_DCLC_SPSC_BOUNDED_QUEUE_H_
+#define DSL_DCLC_SPSC_BOUNDED_QUEUE_H_
+
+#include <atomic>
+#include <new>
+#include <optional>
+
+#include "dslu_concepts.h"
+#include "dslu_util.h"
+
+namespace dcl {
+template<typename T, size_t Capacity> requires dsl::power_of_two < Capacity >
+class spsc_bounded_queue_imp {
+    using value_type                                     = T;
+    static constexpr size_t         ELEMENT_SIZE         = sizeof(T);
+    static constexpr size_t         BUFFER_SIZE          = Capacity * ELEMENT_SIZE;
+    alignas(T)  std::byte           buffer_[BUFFER_SIZE] = {};
+    alignas(64) std::atomic<size_t> head_{0};
+    alignas(64) std::atomic<size_t> tail_{0};
+
+    /** Maps an unbounded index to a buffer position via bitmask */
+    static constexpr size_t slot(const size_t index) {
+        return index & (Capacity - 1);
+    }
+
+	constexpr void* raw_at(const size_t slot) {
+	    return buffer_ + (slot * sizeof(T));
+    }
+
+    /** Returns a laundered pointer to prevent compiler optimization invalidating pointers */
+    T *at(const size_t slot) {
+        return std::launder(reinterpret_cast<T *>(buffer_) + slot);
+    }
+
+public:
+    bool empty() const {
+        return (head_.load(std::memory_order_relaxed) == tail_.load(std::memory_order_acquire));
+    }
+
+    /** @return true on success, false if the queue is full */
+    bool push(const T &data) {
+        const size_t curr = tail_.load(std::memory_order_relaxed);
+        if (curr - head_.load(std::memory_order_acquire) >= Capacity) return false;
+        new(raw_at(slot(curr))) T(data);
+        tail_.store(curr + 1, std::memory_order_release);
+        return true;
+    }
+
+    /**
+     * Moves the front element into the fill parameter and destroys it
+     * @return true on success, false if the queue is empty.
+     */
+    bool pop(T &fill) {
+        const size_t curr = head_.load(std::memory_order_relaxed);
+        if (tail_.load(std::memory_order_acquire) - curr == 0) return false;
+
+        T *ptr = at(slot(curr));
+        fill   = std::move(*ptr);
+        ptr->~T();
+
+        head_.store(curr + 1, std::memory_order_release);
+        return true;
+    }
+
+    /**
+     * @return The moved front element, or std::nullopt if the queue is empty.
+     */
+    std::optional<T> try_pop() {
+        const size_t curr = head_.load(std::memory_order_relaxed);
+        if (tail_.load(std::memory_order_acquire) - curr == 0) return std::nullopt;
+
+        T *              ptr    = at(slot(curr));
+        std::optional<T> result = std::move(*ptr);
+        ptr->~T();
+
+        head_.store(curr + 1, std::memory_order_release);
+        return result;
+    }
+
+    /**
+     * @return Pointer to the front element, or nullptr if empty.
+     * @warning will be invalidated once the element is popped.
+     */
+    const T *top() {
+        if (empty()) return nullptr;
+        return at(slot(head_.load(std::memory_order_relaxed)));
+    }
+
+    void reset() {
+        // Clear queue and delete any remaining elements from it
+    	size_t h = head_.load(std::memory_order_relaxed);
+    	const size_t t = tail_.load(std::memory_order_acquire);
+    	while (h != t) {
+    		at(slot(h++))->~T();
+    		head_.store(h, std::memory_order_relaxed);
+    	}
+    }
+
+    ~spsc_bounded_queue_imp() {
+        reset();
+    }
+};
+
+/**
+ * @brief Lock-free single-producer single-consumer bounded queue, with a capacity at minimum
+ * the requested size.
+ *
+ * @tparam T                  Element type
+ * @tparam RequestedCapacity  Minimum number of elements the queue can hold
+
+ */
+template<typename T, size_t RequestedCapacity>
+class spsc_bounded_queue : public spsc_bounded_queue_imp<T, dsl::round_up_pow2(RequestedCapacity)> {
+public:
+    static constexpr size_t capacity = dsl::round_up_pow2(RequestedCapacity);
+};
+
+// TODO: Add non templated implementation
+}
+
+
+#endif  // DSL_DCLC_SPSC_BOUNDED_QUEUE_H_

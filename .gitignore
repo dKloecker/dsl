@@ -46,6 +46,8 @@ install_manifest.txt
 Makefile
 *.cmake
 !CMakeLists.txt
+!cmake/*.cmake
+!cmake/*.cmake.in
 compile_commands.json
 .ninja_deps
 .ninja_log
@@ -58,7 +60,7 @@ CTestTestfile.cmake
 
 # Google Benchmark output
 benchmark_logs/
-*.json
+benchmark_logs/*.json
 
 # vcpkg
 vcpkg_installed/

@@ -1,26 +1,23 @@
-# DSL
+# dsl
 
-Collection of Low-Level Components and Utilities, made for learning purposes which I use across my CPP projects.
-
-## Layout
+Collection of low-level C++ components and utilities, made for learning purposes,
+which I reuse across my C++ projects.
 
 ```
-dsl/
-├── dsl/                    library headers
-│   ├── core/
-│   │   ├── concepts/       type concepts
-│   │   ├── memory/         fixed-size and multi-size pmr pool resources
-│   │   ├── spsc_queue/     lock-free SPSC ring buffer
-│   │   └── utils/          small helpers
-│   ├── logging/            async, lock-free logger
-├── tests/                  GoogleTest suites
-└── benchmarks/             Google Benchmark suites
-```
+src/
+├── dsl/            <-- Standard Libarary / Foundational Components
+│   ├── dslu/       <-- Utilities
+│   └── dslpmr/     <-- PMR Resources
+├── dcl/            <-- Concurrency Library
+│   ├── dclc/       <-- Concurrency Containers
+│   └── dclu/       <-- Concurrency Utilities
+└── dal/            <-- Application Library
+    └── dall/       <-- Application Logger
 
+tests/{dsl,dcl,dal}/        one GoogleTest executable per library
+benchmarks/{dsl,dcl,dal}/   one Google Benchmark executable per library
+```
 ## Building
-
-Requires CMake 3.26+, a C++23 compiler, and vcpkg for dependencies
-(`gtest`, `benchmark`, `boost-lockfree`).
 
 ```sh
 cmake -B build -S .
@@ -28,4 +25,10 @@ cmake --build build
 ctest --test-dir build
 ```
 
-Toggle tests/benchmarks with `-DDSL_BUILD_TESTING=OFF` / `-DDSL_BUILD_BENCHMARKS=OFF`.
+Toggle with `-DDSL_BUILD_TESTING=OFF` / `-DDSL_BUILD_BENCHMARKS=OFF`.
+
+Benchmarks are one executable per library.
+
+```sh
+./build/benchmarks/dcl_benchmarks --benchmark_filter=spsc
+```
