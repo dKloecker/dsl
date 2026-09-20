@@ -88,8 +88,7 @@ concept bench_queue = bench_payload<typename A::value_type> &&
                           { A::capacity } -> std::convertible_to<std::size_t>;
                       };
 
-// dcl::bounded_queue the generalised implementation, in both its fixed-size
-// (capacity in the type) and dynamic (capacity at construction) forms.
+// dcl::bounded_queue, one adapter per concurrency model
 
 template<bench_payload T, std::size_t Capacity>
 struct dsl_spsc_fixed : queue_adapter<T, Capacity, dcl::b_spsc_q<T, Capacity>> {
@@ -102,6 +101,34 @@ struct dsl_spsc_dyn : queue_adapter<T, Capacity, dcl::b_spsc_q<T>> {
     static constexpr const char *name = "dsl.spsc.dyn";
 
     dsl_spsc_dyn()
+        : base(Capacity) {}
+};
+
+template<bench_payload T, std::size_t Capacity>
+struct dsl_spmc_fixed : queue_adapter<T, Capacity, dcl::b_spmc_q<T, Capacity>> {
+    static constexpr const char *name = "dsl.spmc.fixed";
+};
+
+template<bench_payload T, std::size_t Capacity>
+struct dsl_spmc_dyn : queue_adapter<T, Capacity, dcl::b_spmc_q<T>> {
+    using base                        = queue_adapter<T, Capacity, dcl::b_spmc_q<T>>;
+    static constexpr const char *name = "dsl.spmc.dyn";
+
+    dsl_spmc_dyn()
+        : base(Capacity) {}
+};
+
+template<bench_payload T, std::size_t Capacity>
+struct dsl_mpsc_fixed : queue_adapter<T, Capacity, dcl::b_mpsc_q<T, Capacity>> {
+    static constexpr const char *name = "dsl.mpsc.fixed";
+};
+
+template<bench_payload T, std::size_t Capacity>
+struct dsl_mpsc_dyn : queue_adapter<T, Capacity, dcl::b_mpsc_q<T>> {
+    using base                        = queue_adapter<T, Capacity, dcl::b_mpsc_q<T>>;
+    static constexpr const char *name = "dsl.mpsc.dyn";
+
+    dsl_mpsc_dyn()
         : base(Capacity) {}
 };
 
@@ -174,20 +201,40 @@ std::string bench_name(const std::string_view workload) {
     DSL_BENCH_ONE(Workload, Adapter, dcl::bench::ComplexObject, Capacity, Options)
 
 /**
- * Every queue that can be driven by one producer and one consumer -- which is
+ * Every queue that can be driven by one producer and one consumer  which is
  * every queue here, so this list doubles as the roster. Add a queue here first.
  */
-#define DSL_BENCH_ALL_SPSC(Workload, Capacity, Options)                                 \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spsc_fixed, Capacity, Options)         \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spsc_dyn, Capacity, Options)           \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_fixed, Capacity, Options)         \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_dyn, Capacity, Options)           \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_spsc_fixed, Capacity, Options)       \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_spsc_dyn, Capacity, Options)         \
+#define DSL_BENCH_ALL_SPSC(Workload, Capacity, Options)                           \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spsc_fixed, Capacity, Options)   \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spsc_dyn, Capacity, Options)     \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spmc_fixed, Capacity, Options)   \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spmc_dyn, Capacity, Options)     \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpsc_fixed, Capacity, Options)   \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpsc_dyn, Capacity, Options)     \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_fixed, Capacity, Options)   \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_dyn, Capacity, Options)     \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_spsc_fixed, Capacity, Options) \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_spsc_dyn, Capacity, Options)   \
     DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_mpmc, Capacity, Options)
 
-/// Every queue that tolerates several producers against a single consumer.
+/**
+ * Every queue that tolerates several producers against a single consumer: the
+ * dedicated MPSC algorithm, and the MPMC ones that also cover the shape.
+ */
 #define DSL_BENCH_ALL_MPSC(Workload, Capacity, Options)                         \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpsc_fixed, Capacity, Options) \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpsc_dyn, Capacity, Options)   \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_fixed, Capacity, Options) \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_dyn, Capacity, Options)   \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_mpmc, Capacity, Options)
+
+/**
+ * Every queue that tolerates a single producer against several consumers: the
+ * dedicated SPMC algorithm, and the MPMC ones that also cover the shape.
+ */
+#define DSL_BENCH_ALL_SPMC(Workload, Capacity, Options)                         \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spmc_fixed, Capacity, Options) \
+    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spmc_dyn, Capacity, Options)   \
     DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_fixed, Capacity, Options) \
     DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_dyn, Capacity, Options)   \
     DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_mpmc, Capacity, Options)

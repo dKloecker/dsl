@@ -422,9 +422,6 @@ DSL_BQ_ALL(BM_FillAndDrain, 16384, ->ArgName("fill_pct")->Arg(0)->MinWarmUpTime(
 // Steady state at an empty, a half full, and a full queue.
 DSL_BQ_ALL(BM_PushPop, 1024, ->ArgName("fill_pct")->Arg(0)->Arg(50)->Arg(100)->MinWarmUpTime(0.5))
 
-// Throughput under the thread shapes each model is meant to serve. SPMC and MPSC
-// currently select the MPMC algorithm, so for now their numbers measure it under
-// their own shape rather than a dedicated implementation.
 DSL_BQ_PAYLOADS(BM_Throughput, SPSC, 1024, ->Apply(dcl::bench::spsc_shapes)->UseRealTime())
 DSL_BQ_PAYLOADS(BM_Throughput, SPMC, 1024, ->Apply(dcl::bench::spmc_shapes)->UseRealTime())
 DSL_BQ_PAYLOADS(BM_Throughput, MPSC, 1024, ->Apply(dcl::bench::mpsc_shapes)->UseRealTime())

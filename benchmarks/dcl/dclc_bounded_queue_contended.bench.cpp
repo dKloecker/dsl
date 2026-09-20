@@ -1,8 +1,8 @@
 //
 // Contended comparison: the same queues under several producers and consumers at
 // once. Only the queues whose concurrency model actually allows it are
-// registered -- see the DSL_BENCH_ALL_MPSC / DSL_BENCH_ALL_MPMC rosters in
-// dclc_bounded_queue_bench_types.h.
+// registered -- see the DSL_BENCH_ALL_MPSC / DSL_BENCH_ALL_SPMC /
+// DSL_BENCH_ALL_MPMC rosters in dclc_bounded_queue_bench_types.h.
 //
 // Thread counts come in as arguments so one workload covers every shape:
 // Args({producers, consumers}), the main (timed) thread counting as a producer.
@@ -74,10 +74,13 @@ void BM_Contended(benchmark::State &state) {
     state.SetItemsProcessed(static_cast<std::int64_t>(pushed));
 }
 
-// Many producers, one consumer -- the shape the mutex-based old.mpsc was written
-// for, and the one an async logger drains with.
+// Many producers, one consumer
 DSL_BENCH_ALL_MPSC(BM_Contended, 1024,
                    ->Args({2, 1})->Args({4, 1})->UseRealTime()->MinWarmUpTime(0.2))
+
+// One producer, many consume
+DSL_BENCH_ALL_SPMC(BM_Contended, 1024,
+                   ->Args({1, 2})->Args({1, 4})->UseRealTime()->MinWarmUpTime(0.2))
 
 // Symmetric contention, including {1, 1} so the price of the multi-producer
 // algorithm at zero contention is visible next to the SPSC numbers.
