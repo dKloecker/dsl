@@ -80,7 +80,7 @@ TEST_F(AsyncLoggerTest, LogsAreTruncatedIfTooLarge) {
     const LogConfig cfg{.min_log_file_level = LogLevel::e_DEBUG, .log_file = log_path, .format = "%m"};
 
     // Build a message longer than max message length
-    std::string long_message(Logger::MAX_MESSAGE_LENGTH + 100, 'X');
+    std::string long_message(DefaultAsyncLogger::MAX_MESSAGE_LENGTH + 100, 'X');
 
     AsyncLogger<>::instance().init(cfg);
     AsyncLogger<>::instance().info(long_message);
@@ -90,8 +90,8 @@ TEST_F(AsyncLoggerTest, LogsAreTruncatedIfTooLarge) {
     std::string   line;
     std::getline(log_file, line);
 
-    EXPECT_EQ(line.length(), Logger::MAX_MESSAGE_LENGTH);
-    EXPECT_EQ(line, std::string(Logger::MAX_MESSAGE_LENGTH, 'X'));
+    EXPECT_EQ(line.length(), DefaultAsyncLogger::MAX_MESSAGE_LENGTH);
+    EXPECT_EQ(line, std::string(DefaultAsyncLogger::MAX_MESSAGE_LENGTH, 'X'));
 }
 
 TEST_F(AsyncLoggerTest, LogsWrittenAfterBufferFlush) {

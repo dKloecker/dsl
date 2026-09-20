@@ -5,11 +5,14 @@
 #ifndef DSL_DALL_LOG_RECORD_H_
 #define DSL_DALL_LOG_RECORD_H_
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <source_location>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include "dall_logger_enums.h"
@@ -36,6 +39,19 @@ struct LogRecord {
 	std::chrono::time_point<std::chrono::system_clock> time_stamp = std::chrono::system_clock::now();
 	std::thread::id                                    thread_id  = std::this_thread::get_id();
 };
+
+/**
+ * @brief Build a record stamped with the calling thread and the current time.
+ * Messages longer than @c log_defaults::MAX_MESSAGE_LENGTH are truncated.
+ */
+inline LogRecord make_record(const LogLevel level, const std::string_view message, const std::source_location loc) {
+	LogRecord record{};
+	record.level          = level;
+	record.message_length = std::min(message.length(), log_defaults::MAX_MESSAGE_LENGTH);
+	record.location       = loc;
+	std::memcpy(record.message, message.data(), record.message_length);
+	return record;
+}
 
 /**
  * @brief Configuration for @c AsyncLogger

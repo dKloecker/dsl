@@ -13,7 +13,8 @@ enum class LogLevel : std::uint8_t {
     e_ERROR = 1,
     e_WARN  = 2,
     e_INFO  = 3,
-    e_DEBUG = 4
+    e_DEBUG = 4,
+    e_TRACE = 5,
 };
 
 constexpr std::string_view to_string(const LogLevel level) {
@@ -23,6 +24,7 @@ constexpr std::string_view to_string(const LogLevel level) {
         case LogLevel::e_WARN: return "WARN";
         case LogLevel::e_INFO: return "INFO";
         case LogLevel::e_DEBUG: return "DEBUG";
+        case LogLevel::e_TRACE: return "TRACE";
     }
     return "";
 }

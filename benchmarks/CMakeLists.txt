@@ -9,6 +9,6 @@ dsl_add_benchmark_suite(dsl)
 dsl_add_benchmark_suite(dcl)
 dsl_add_benchmark_suite(dal)
 
-# The comparison benchmark measures against boost::lockfree::spsc_queue.
+# The queue comparison benchmarks measure against boost::lockfree::spsc_queue and boost::lockfree::queue.
 find_package(Boost CONFIG REQUIRED)
 target_link_libraries(dcl_benchmarks PRIVATE Boost::headers)

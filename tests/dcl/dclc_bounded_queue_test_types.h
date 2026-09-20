@@ -1,23 +1,24 @@
 //
 // Created by Dominic Kloecker on 16/09/2026.
 //
-// Shared fixtures for the bounded queue suites: instrumentation types that make
+// Shared fixtures for the bounded queue suite: instrumentation types that make
 // element lifetimes and slot alignment observable, plus the tag list that drives
 // the typed tests over every queue flavour.
 //
+
 #ifndef DSL_TESTS_DCLC_BOUNDED_QUEUE_TEST_TYPES_H_
 #define DSL_TESTS_DCLC_BOUNDED_QUEUE_TEST_TYPES_H_
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <thread>
 #include <gtest/gtest.h>
 
-#include "dclc_mpmc_bounded_queue.h"
-#include "dclc_mpsc_bounded_queue.h"
-#include "dclc_spsc_bounded_queue.h"
+#include "dclc_bounded_queue.h"
 
 namespace dcl::test {
 
@@ -27,52 +28,68 @@ namespace dcl::test {
  * every owner (including the queue itself) has gone away.
  */
 struct Counters {
-    int constructed = 0;
-    int destroyed   = 0;
-    int copies      = 0;
-    int moves       = 0;
+    std::atomic<int> constructed{0};
+    std::atomic<int> destroyed{0};
+    std::atomic<int> copies{0};
+    std::atomic<int> moves{0};
 
-    int live() const { return constructed - destroyed; }
+    int live() const {
+        return constructed.load(std::memory_order_relaxed) - destroyed.load(std::memory_order_relaxed);
+    }
 };
 
 /**
- * Element type that reports every construction and destruction. Assignment does
- * not touch the ledger: it transfers a value between two already-live objects.
+ * Element type that reports every construction and destruction.
+ *
  */
 struct Tracked {
-    Counters *counters;
-    int       value;
+    Counters *counters = nullptr;
+    int       value    = 0;
+
+    Tracked() = default;
 
     Tracked(Counters *c, const int v)
-        : counters(c), value(v) { ++counters->constructed; }
+        : counters(c), value(v) { if (counters) ++counters->constructed; }
 
     Tracked(const Tracked &other)
         : counters(other.counters), value(other.value) {
-        ++counters->constructed;
-        ++counters->copies;
+        if (counters) {
+            ++counters->constructed;
+            ++counters->copies;
+        }
     }
 
     Tracked(Tracked &&other) noexcept
         : counters(other.counters), value(other.value) {
-        ++counters->constructed;
-        ++counters->moves;
+        if (counters) {
+            ++counters->constructed;
+            ++counters->moves;
+        }
     }
 
     Tracked &operator=(const Tracked &other) {
-        counters = other.counters;
-        value    = other.value;
+        rebind(other.counters);
+        value = other.value;
         return *this;
     }
 
     Tracked &operator=(Tracked &&other) noexcept {
-        counters = other.counters;
-        value    = other.value;
+        rebind(other.counters);
+        value = other.value;
         return *this;
     }
 
-    ~Tracked() { ++counters->destroyed; }
+    ~Tracked() { if (counters) ++counters->destroyed; }
 
     friend bool operator==(const Tracked &l, const Tracked &r) { return l.value == r.value; }
+
+private:
+    void rebind(Counters *c) {
+        if (counters == c) return;
+        if (counters) ++counters->destroyed;
+        counters = c;
+        if (counters) ++counters->constructed;
+    }
 };
 
 /**
@@ -105,7 +122,7 @@ struct alignas(128) OverAligned {
 
 /**
  * Element whose two halves must always agree. A torn or half-published write
- * between concurrent producers shows up as `b != ~a`.
+ * shows up as `b != ~a`.
  */
 struct Paired {
     std::uint64_t a = 0;
@@ -130,30 +147,76 @@ bool spin_until(Pred pred, const std::chrono::milliseconds timeout = std::chrono
     return true;
 }
 
-// -- Tags binding the shared typed tests to each queue flavour ----------------
+/// Queue Types (fixed and dynamic size)
 
-struct spsc_tag {
-    static constexpr const char *name = "spsc";
+/// Capacity baked into the type.
+template<concurrency C>
+struct fixed_capacity {
+    static constexpr concurrency model         = C;
+    static constexpr bool        runtime_sized = false;
 
-    template<typename T, size_t RequestedCapacity>
-    using queue = dcl::spsc_bounded_queue<T, RequestedCapacity>;
+    template<typename T, std::size_t Capacity>
+    using queue = dcl::bounded_queue<T, C, Capacity>;
+
+    template<typename T, std::size_t Capacity>
+    static auto make() { return std::make_unique<queue<T, Capacity>>(); }
 };
 
-struct mpsc_tag {
-    static constexpr const char *name = "mpsc";
+/// Capacity supplied to the constructor.
+template<concurrency C>
+struct dynamic_capacity {
+    static constexpr concurrency model         = C;
+    static constexpr bool        runtime_sized = true;
 
-    template<typename T, size_t RequestedCapacity>
-    using queue = dcl::mpsc_bounded_queue<T, RequestedCapacity>;
+    template<typename T, std::size_t Capacity>
+    using queue = dcl::bounded_queue<T, C>;
+
+    template<typename T, std::size_t Capacity>
+    static auto make() { return std::make_unique<queue<T, Capacity>>(Capacity); }
 };
 
-struct mpmc_tag {
-    static constexpr const char *name = "mpmc";
-
-    template<typename T, size_t RequestedCapacity>
-    using queue = dcl::mpmc_bounded_queue<T, RequestedCapacity>;
+struct spsc_fixed_tag : fixed_capacity<concurrency::SPSC> {
+    static constexpr const char *name = "spsc_fixed";
 };
 
-using QueueTags = ::testing::Types<spsc_tag, mpsc_tag, mpmc_tag>;
+struct spsc_dyn_tag : dynamic_capacity<concurrency::SPSC> {
+    static constexpr const char *name = "spsc_dyn";
+};
+
+struct spmc_fixed_tag : fixed_capacity<concurrency::SPMC> {
+    static constexpr const char *name = "spmc_fixed";
+};
+
+struct spmc_dyn_tag : dynamic_capacity<concurrency::SPMC> {
+    static constexpr const char *name = "spmc_dyn";
+};
+
+struct mpsc_fixed_tag : fixed_capacity<concurrency::MPSC> {
+    static constexpr const char *name = "mpsc_fixed";
+};
+
+struct mpsc_dyn_tag : dynamic_capacity<concurrency::MPSC> {
+    static constexpr const char *name = "mpsc_dyn";
+};
+
+struct mpmc_fixed_tag : fixed_capacity<concurrency::MPMC> {
+    static constexpr const char *name = "mpmc_fixed";
+};
+
+struct mpmc_dyn_tag : dynamic_capacity<concurrency::MPMC> {
+    static constexpr const char *name = "mpmc_dyn";
+};
+
+using QueueTags = ::testing::Types<
+    spsc_fixed_tag,
+    spsc_dyn_tag,
+    spmc_fixed_tag,
+    spmc_dyn_tag,
+    mpsc_fixed_tag,
+    mpsc_dyn_tag,
+    mpmc_fixed_tag,
+    mpmc_dyn_tag
+>;
 
 class QueueTagNames {
 public:

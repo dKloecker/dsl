@@ -13,7 +13,7 @@
 #include <thread>
 
 #include "dall_log_record.h"
-#include "dclc_mpmc_bounded_queue.h"
+#include "dclc_bounded_queue.h"
 #include "dclu_life_timed.h"
 
 namespace dal {
@@ -37,7 +37,7 @@ class AsyncLogger : public dcl::LifeTimed {
 	std::stop_source stop_{};
 
 	char                      stream_buffer_[STREAM_BUFFER_SIZE]{};
-	dcl::mpmc_bounded_queue<LogRecord, QC> queue_{};
+	dcl::b_mpmc_q<LogRecord, QC>	   queue_{};
 	std::ofstream					   log_file_{};
 
 	AsyncLogger() = default;
@@ -158,6 +158,10 @@ public:
 	         std::string_view            message,
 	         const std::source_location &loc = std::source_location::current());
 
+	void trace(const std::string_view message, const std::source_location &loc = std::source_location::current()) {
+		log(LogLevel::e_TRACE, message, loc);
+	};
+
 	void debug(const std::string_view message, const std::source_location &loc = std::source_location::current()) {
 		log(LogLevel::e_DEBUG, message, loc);
 	};
@@ -180,16 +184,16 @@ public:
 };
 
 /// @brief Default logger type alias.
-using Logger = AsyncLogger<>;
+using DefaultAsyncLogger = AsyncLogger<>;
 
 /// @name Convenience logging macros
 /// Support @c std::format syntax. Source location is captured automatically.
 /// @{
-#define LOG_DEBUG(FMT, ...) Logger::instance().debug(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
-#define LOG_INFO(FMT, ...) Logger::instance().info(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
-#define LOG_WARN(FMT, ...) Logger::instance().warn(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
-#define LOG_ERROR(FMT, ...) Logger::instance().error(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
-#define LOG_FATAL(FMT, ...) Logger::instance().fatal(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
+#define LOG_DEBUG(FMT, ...) ::dal::DefaultAsyncLogger::instance().debug(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
+#define LOG_INFO(FMT, ...) ::dal::DefaultAsyncLogger::instance().info(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
+#define LOG_WARN(FMT, ...) ::dal::DefaultAsyncLogger::instance().warn(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
+#define LOG_ERROR(FMT, ...) ::dal::DefaultAsyncLogger::instance().error(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
+#define LOG_FATAL(FMT, ...) ::dal::DefaultAsyncLogger::instance().fatal(std::format(FMT __VA_OPT__(,) __VA_ARGS__))
 ///@}
 }
 

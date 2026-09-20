@@ -22,20 +22,20 @@ static void BM_EnqueueWithinBuffer(benchmark::State &state) {
     const size_t      msg_len = state.range(0);
     const std::string message(msg_len, 'X');
 
-    Logger::instance().reset();
-    Logger::instance().init({
+    DefaultAsyncLogger::instance().reset();
+    DefaultAsyncLogger::instance().init({
         .min_log_file_level = LogLevel::e_DEBUG,
         .log_file           = std::string(LOG_DIR) + "BM_EnqueueWithinBuffer.log"
     });
 
     for (auto _: state) {
-        Logger::instance().info(message);
+        DefaultAsyncLogger::instance().info(message);
     }
 
     state.SetItemsProcessed(state.iterations());
     state.SetBytesProcessed(state.iterations() * static_cast<int64_t>(msg_len));
 
-    Logger::instance().reset();
+    DefaultAsyncLogger::instance().reset();
     cleanup_logs();
 }
 
@@ -52,20 +52,20 @@ static void BM_EnqueueWithFlush(benchmark::State &state) {
     const size_t      msg_len = state.range(0);
     const std::string message(msg_len, 'X');
 
-    Logger::instance().reset();
-    Logger::instance().init({
+    DefaultAsyncLogger::instance().reset();
+    DefaultAsyncLogger::instance().init({
         .min_log_file_level = LogLevel::e_DEBUG,
         .log_file           = std::string(LOG_DIR) + "BM_EnqueueWithFlush.log"
     });
 
     for (auto _: state) {
-        Logger::instance().error(message);
+        DefaultAsyncLogger::instance().error(message);
     }
 
     state.SetItemsProcessed(state.iterations());
     state.SetBytesProcessed(state.iterations() * static_cast<int64_t>(msg_len));
 
-    Logger::instance().reset();
+    DefaultAsyncLogger::instance().reset();
     cleanup_logs();
 }
 
@@ -81,25 +81,25 @@ log_defaults::MAX_MESSAGE_LENGTH
 
 
 static void BM_FilteredOutMessages(benchmark::State &state) {
-    Logger::instance().reset();
-    Logger::instance().init({
+    DefaultAsyncLogger::instance().reset();
+    DefaultAsyncLogger::instance().init({
         .min_log_file_level = LogLevel::e_ERROR,
         .log_file           = std::string(LOG_DIR) + "BM_FilteredOut.log"
     });
 
     for (auto _: state) {
-        Logger::instance().debug("Some Message that should be filtered out");
+        DefaultAsyncLogger::instance().debug("Some Message that should be filtered out");
     }
     state.SetItemsProcessed(state.iterations());
-    Logger::instance().reset();
+    DefaultAsyncLogger::instance().reset();
     cleanup_logs();
 }
 
 BENCHMARK (BM_FilteredOutMessages);
 
 static void BM_BurstBlocking(benchmark::State &state) {
-    Logger::instance().reset();
-    Logger::instance().init({
+    DefaultAsyncLogger::instance().reset();
+    DefaultAsyncLogger::instance().init({
         .min_log_file_level   = LogLevel::e_DEBUG,
         .log_file             = std::string(LOG_DIR) + "BM_BurstBlocking.log",
         .back_pressure_policy = BackPressurePolicy::e_BLOCK
@@ -108,13 +108,13 @@ static void BM_BurstBlocking(benchmark::State &state) {
     constexpr size_t number_of_messages = 1000;
     for (auto _: state) {
         for (int i = 0; i < number_of_messages; ++i) {
-            Logger::instance().info("Burst message under backpressure");
+            DefaultAsyncLogger::instance().info("Burst message under backpressure");
         }
     }
 
     state.SetItemsProcessed(state.iterations() * number_of_messages);
 
-    Logger::instance().reset();
+    DefaultAsyncLogger::instance().reset();
     cleanup_logs();
 }
 
@@ -127,8 +127,8 @@ static void BM_BurstPolicyComparison(benchmark::State &state) {
 
     for (auto _: state) {
         state.PauseTiming();
-        Logger::instance().reset();
-        Logger::instance().init({
+        DefaultAsyncLogger::instance().reset();
+        DefaultAsyncLogger::instance().init({
             .min_log_file_level   = LogLevel::e_INFO,
             .log_file             = std::string(LOG_DIR) + "BM_BurstPolicyComparison.log",
             .back_pressure_policy = policy,
@@ -137,13 +137,13 @@ static void BM_BurstPolicyComparison(benchmark::State &state) {
         state.ResumeTiming();
 
         for (int64_t i = 0; i < num_messages; ++i) {
-            Logger::instance().info("Some informational log that might be filtered");
-            Logger::instance().warn("Some warning log that will not be filtered");
+            DefaultAsyncLogger::instance().info("Some informational log that might be filtered");
+            DefaultAsyncLogger::instance().warn("Some warning log that will not be filtered");
         }
     }
 
     state.SetItemsProcessed(state.iterations() * num_messages * 2);
-    Logger::instance().reset();
+    DefaultAsyncLogger::instance().reset();
     cleanup_logs();
 }
 

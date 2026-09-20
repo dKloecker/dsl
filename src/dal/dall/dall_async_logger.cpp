@@ -19,6 +19,9 @@ std::optional<dcl::LifeTimed::Error> AsyncLogger<QueueCapacity, FlushThreshold>:
 		if (path.has_parent_path()) {
 			std::filesystem::create_directories(path.parent_path());
 		}
+		// Start from a fresh stream: on Apple's libc++ a closed and reopened
+		// ofstream stays unbuffered, even after pubsetbuf, so a restart was ~100x slower.
+		log_file_ = std::ofstream{};
 		log_file_.rdbuf()->pubsetbuf(stream_buffer_, STREAM_BUFFER_SIZE);
 		log_file_.open(path, std::ios::out | std::ios::app);
 		if (!log_file_.is_open()) {
