@@ -13,6 +13,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <memory>
 #include <new>
@@ -21,29 +22,12 @@
 #include <stdexcept>
 #include <utility>
 
+#include "dclu_concurrency_traits.h"
 #include "dslu_concepts.h"
+
 namespace dcl {
 
-// TODO: Add utility to take concurrency and assert min / max level onto it.
-// E.g. to allow for adding methods and constricting them based on concurrency
-// e.g. this method can only be used when MC safe˙
-// example is a peek_front() / peek_back() method to peek but not pop. But i might only want this
-// for the sp/sc versions of them
-enum class concurrency : std::uint8_t {
-	NONE = 0,			// 0000
-	SC   = 1 << 0,		// 0001
-	SP	 = 1 << 1,		// 0010
-	MC   = SC | 1 << 2,	// 0101
-	MP	 = SP | 1 << 3, // 1010
-	SPSC = SP | SC,		// 0011
-	SPMC = SP | MC,		// 0111
-	MPSC = MP | SC,		// 1011
-	MPMC = MP | MC		// 1111
-};
-
 namespace details {
-
-
 /// Signed distance between two sequence numbers (safe for underflow)
 constexpr std::ptrdiff_t diff(const std::size_t l, const std::size_t r) {
 	return static_cast<std::ptrdiff_t>(l-r);
@@ -58,21 +42,6 @@ inline constexpr bool is_dynamic = (N == std::dynamic_extent);
 /// Valid extend is either power of 2 or dynamic extend
 template <std::size_t N>
 concept valid_or_dynamic = is_dynamic<N> || dsl::power_of_two<N>;
-
-// Ensures that the requested queue concurrency model is supported (having both a consumer and producer policy defined)
-// Must have a consumer (0001) and a producer (0010)
-
-// MC includes MC and SC Flag, at least one of the two must be set.
-template <concurrency C>
-concept has_consumer_policy = (static_cast<std::uint8_t>(concurrency::MC) & static_cast<std::uint8_t>(C)) > 0;
-
-// MP includes MP and SP Flag, at least one of the two must be set.
-template <concurrency C>
-concept has_producer_policy= (static_cast<std::uint8_t>(concurrency::MP) & static_cast<std::uint8_t>(C)) > 0;
-
-template <concurrency C>
-concept valid_concurrency_model = has_consumer_policy<C> && has_producer_policy<C>;
-
 
 template <typename T>
 struct byte_slot {
@@ -214,6 +183,9 @@ public:
 	// Inherit base constructor (for dynamic size)
 	using base::base;
 
+	// single writer single reader safe
+	static constexpr auto concurrency_guarantee = concurrency::swsr;
+
 	template <typename ...Args>
 	bool produce(Args&&...args) {
 		const size_t curr = tail_.load(std::memory_order::relaxed);
@@ -239,9 +211,14 @@ public:
 	}
 };
 
-/// Bounded MPMC queue requires sequence slots
-template <typename T, size_t N>
-class bounded_mpmc_imp : public queue_base<seq_slot<T>, N> {
+/**
+ * Bounded Queue implementation safe for all concurrency levels
+ * Internally chooses between the appropriate consume / produce algorithm
+ * based on the provided concurrency requirement
+ * (e.g. slightly more relaxed produce / consume versions when possible)
+ */
+template <typename T, concurrency C, size_t N>
+class bounded_queue_imp: public queue_base<seq_slot<T>, N> {
 	using base = queue_base<seq_slot<T>, N>;
 	// Bring dependent base members into scope
 	using base::tail_;
@@ -255,18 +232,18 @@ class bounded_mpmc_imp : public queue_base<seq_slot<T>, N> {
 		}
 	}
 public:
-	// MPMC Queue must init the sequence numbers in each slot before it can be used
-	bounded_mpmc_imp()
+	// The sequence numbers in each slot must be initialised before the queue can be used
+	bounded_queue_imp()
 	requires (!is_dynamic<N>)
 		{ init_slot_sequence(); }
 
-	explicit bounded_mpmc_imp(const size_t capacity)
+	explicit bounded_queue_imp(const size_t capacity)
 	requires is_dynamic<N>
 		: base(capacity)
 		{ init_slot_sequence(); }
 
-	// TODO: Update produce and consume algos to be flexible?
-	// E.g. on fail / on success policy? could then even allow for returning of values
+	/// Serves exactly the model that was asked for
+	static constexpr concurrency concurrency_guarantee = C;
 
 	template <typename ...Args>
 	requires std::is_nothrow_constructible_v<T, Args...> || std::is_nothrow_move_constructible_v<T>
@@ -282,214 +259,12 @@ public:
 			return claim_and_emplace(std::forward<Args>(args)...);
 		}
 	}
-
 private:
+	/// Single producer (calling thread is the only one advancing tail so no cas needed to claim a slot)
 	template <typename ...Args>
-	requires std::is_nothrow_constructible_v<T, Args...>
+	requires std::is_nothrow_constructible_v<T, Args...> && single_writer<C>
 	bool claim_and_emplace(Args&&...args) {
-		size_t pos = tail_.load(std::memory_order_relaxed);
-		seq_slot<T> * slot;
-		// To claim a slot we need to slot to be at sequence number = tail
-		// and write tail + 1 once value is stored (to mark it safe for consumption)
-		while (true) {
-			slot = &ring_buffer_[ring_buffer_.index(pos)];
-			// If the position is the same value as the slot sequence counter
-			// the slot has not yet been claimed, so we can attempt to claim
-			if (const std::ptrdiff_t d = diff(slot->seq_.load(std::memory_order_acquire), pos);
-				d == 0) {
-				// Attempt to claim slot by advancing tail to next position.
-				// If we fail to claim tail, we have been beaten by another thread so retry on new position
-				if (tail_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) break;
-			} else if (d < 0) {
-				// Slot still contains the element from the last lap (queue is full) so fail
-				return false;
-			} else {
-				// Another producer has already claimed this slot, try again with updated position
-				pos = tail_.load(std::memory_order_relaxed);
-			}
-		}
-		// Store data and publish claim
-		slot->emplace(std::forward<Args>(args)...);
-		slot->seq_.store(pos + 1, std::memory_order_release);
-		return true;
-	}
-
-public:
-	bool consume(T& fill) {
-		std::size_t pos = head_.load(std::memory_order_relaxed);
-		seq_slot<T> * slot;
-		// A slot is viable for consumption if its sequence is = head + 1
-		// Once consumed, it is marked as ready for storing of a new element via head + capacity (i.e. next lap)
-		for (;;) {
-			slot = &ring_buffer_[ring_buffer_.index(pos)];
-			if (const std::ptrdiff_t d = diff(slot->seq_.load(std::memory_order_acquire), pos + 1);
-				d == 0) {
-				// Attempt to claim slot of re-try if another thread has beaten us
-				if (head_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) break;
-			} else if (d < 0) {
-				// There is nothing to consume (queue is empty) so fail
-				return false;
-			} else {
-				// Another consumer has already claimed this slot so retry
-				pos = head_.load(std::memory_order_relaxed);
-			}
-		}
-		// Move element out of slot and reset it
-		fill = std::move(slot->value());
-		slot->destroy();
-		// Publish completion of slot transfer
-		slot->seq_.store(pos + ring_buffer_.capacity(), std::memory_order_release);
-		return true;
-	}
-};
-
-// TODO: Maybe can unify the 3 MPMC SPMC MPSC
-
-/// Bounded MPSC queue requires sequence slots
-template <typename T, size_t N>
-class bounded_mpsc_imp : public queue_base<seq_slot<T>, N> {
-	using base = queue_base<seq_slot<T>, N>;
-	// Bring dependent base members into scope
-	using base::tail_;
-	using base::head_;
-	using base::ring_buffer_;
-
-	void init_slot_sequence() {
-		// Set the initial slot values (equal to their index)
-		for (size_t i = 0; i != ring_buffer_.capacity(); i++) {
-			ring_buffer_[i].seq_.store(i, std::memory_order_relaxed);
-		}
-	}
-public:
-	// MPMC Queue must init the sequence numbers in each slot before it can be used
-	bounded_mpsc_imp()
-	requires (!is_dynamic<N>)
-		{ init_slot_sequence(); }
-
-	explicit bounded_mpsc_imp(const size_t capacity)
-	requires is_dynamic<N>
-		: base(capacity)
-		{ init_slot_sequence(); }
-
-	template <typename ...Args>
-	requires std::is_nothrow_constructible_v<T, Args...> || std::is_nothrow_move_constructible_v<T>
-	bool produce(Args&&...args) {
-		// Element constructor might throw (e.g. bad alloc), once a producer has claimed it.
-		// Since this would then prevent the publishing of the sequence count to the claimed state
-		// leaving queue unrecoverable, we attempt construction of the element itself before undergoing the claim
-		// the claim and emplacement step, which should ensure that the element would have already thrown
-		if constexpr (!std::is_nothrow_constructible_v<T, Args...>) {
-			T staged(std::forward<Args>(args)...);
-			return claim_and_emplace(std::move(staged));
-		} else {
-			return claim_and_emplace(std::forward<Args>(args)...);
-		}
-	}
-
-private:
-	template <typename ...Args>
-	requires std::is_nothrow_constructible_v<T, Args...>
-	bool claim_and_emplace(Args&&...args) {
-		size_t pos = tail_.load(std::memory_order_relaxed);
-		seq_slot<T> * slot;
-		// To claim a slot we need to slot to be at sequence number = tail
-		// and write tail + 1 once value is stored (to mark it safe for consumption)
-		while (true) {
-			slot = &ring_buffer_[ring_buffer_.index(pos)];
-			// If the position is the same value as the slot sequence counter
-			// the slot has not yet been claimed, so we can attempt to claim
-			if (const std::ptrdiff_t d = diff(slot->seq_.load(std::memory_order_acquire), pos);
-				d == 0) {
-				// Attempt to claim slot by advancing tail to next position.
-				// If we fail to claim tail, we have been beaten by another thread so retry on new position
-				if (tail_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) break;
-			} else if (d < 0) {
-				// Slot still contains the element from the last lap (queue is full) so fail
-				return false;
-			} else {
-				// Another producer has already claimed this slot, try again with updated position
-				pos = tail_.load(std::memory_order_relaxed);
-			}
-		}
-		// Store data and publish claim
-		slot->emplace(std::forward<Args>(args)...);
-		slot->seq_.store(pos + 1, std::memory_order_release);
-		return true;
-	}
-
-public:
-	bool consume(T& fill) {
-		// We are only consumer so can load relaxed
-		std::size_t pos = head_.load(std::memory_order_relaxed);
-		auto& slot = ring_buffer_[ring_buffer_.index(pos)];
-
-		if (const std::ptrdiff_t d = diff(slot.seq_.load(std::memory_order_acquire), pos + 1); d < 0) {
-			// Queue is full (if we are only consumer then we should never be lapped)
-			return false;
-		} else if (d > 0) {
-			assert(false); // "Consumer may never be lapped in SC flow"
-		}
-		// Advance head and claim theslot
-		head_.store(pos + 1, std::memory_order_release);
-		// Move element out of slot and reset it
-		fill = std::move(slot.value());
-		slot.destroy();
-		// Publish completion of slot transfer
-		slot.seq_.store(pos + ring_buffer_.capacity(), std::memory_order_release);
-		return true;
-	}
-};
-
-
-/// Bounded SPMC queue requires sequence slots
-template <typename T, size_t N>
-class bounded_spmc_imp : public queue_base<seq_slot<T>, N> {
-	using base = queue_base<seq_slot<T>, N>;
-	// Bring dependent base members into scope
-	using base::tail_;
-	using base::head_;
-	using base::ring_buffer_;
-
-	void init_slot_sequence() {
-		// Set the initial slot values (equal to their index)
-		for (size_t i = 0; i != ring_buffer_.capacity(); i++) {
-			ring_buffer_[i].seq_.store(i, std::memory_order_relaxed);
-		}
-	}
-public:
-	// MPMC Queue must init the sequence numbers in each slot before it can be used
-	bounded_spmc_imp()
-	requires (!is_dynamic<N>)
-		{ init_slot_sequence(); }
-
-	explicit bounded_spmc_imp(const size_t capacity)
-	requires is_dynamic<N>
-		: base(capacity)
-		{ init_slot_sequence(); }
-
-	// TODO: Update produce and consume algos to be flexible?
-	// E.g. on fail / on success policy? could then even allow for returning of values
-
-	template <typename ...Args>
-	requires std::is_nothrow_constructible_v<T, Args...> || std::is_nothrow_move_constructible_v<T>
-	bool produce(Args&&...args) {
-		// Element constructor might throw (e.g. bad alloc), once a producer has claimed it.
-		// Since this would then prevent the publishing of the sequence count to the claimed state
-		// leaving queue unrecoverable, we attempt construction of the element itself before undergoing the claim
-		// the claim and emplacement step, which should ensure that the element would have already thrown
-		if constexpr (!std::is_nothrow_constructible_v<T, Args...>) {
-			T staged(std::forward<Args>(args)...);
-			return claim_and_emplace(std::move(staged));
-		} else {
-			return claim_and_emplace(std::forward<Args>(args)...);
-		}
-	}
-
-private:
-	template <typename ...Args>
-	requires std::is_nothrow_constructible_v<T, Args...>
-	bool claim_and_emplace(Args&&...args) {
-		// Only producer so can be releaxed
+		// Only producer so can be relaxed
 		size_t pos = tail_.load(std::memory_order_relaxed);
 		auto& slot = ring_buffer_[ring_buffer_.index(pos)];
 
@@ -506,8 +281,64 @@ private:
 		return true;
 	}
 
+	/// Multi Ponsumer (other threads may try to claim tail so we need to contend for it)
+	template <typename ...Args>
+	requires std::is_nothrow_constructible_v<T, Args...> && multi_writer<C>
+	bool claim_and_emplace(Args&&...args) {
+		size_t pos = tail_.load(std::memory_order_relaxed);
+		seq_slot<T> * slot;
+		// To claim a slot we need to slot to be at sequence number = tail
+		// and write tail + 1 once value is stored (to mark it safe for consumption)
+		while (true) {
+			slot = &ring_buffer_[ring_buffer_.index(pos)];
+			// If the position is the same value as the slot sequence counter
+			// the slot has not yet been claimed, so we can attempt to claim
+			if (const std::ptrdiff_t d = diff(slot->seq_.load(std::memory_order_acquire), pos);
+				d == 0) {
+				// Attempt to claim slot by advancing tail to next position.
+				// If we fail to claim tail, we have been beaten by another thread so retry on new position
+				if (tail_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) break;
+			} else if (d < 0) {
+				// Slot still contains the element from the last lap (queue is full) so fail
+				return false;
+			} else {
+				// Another producer has already claimed this slot, try again with updated position
+				pos = tail_.load(std::memory_order_relaxed);
+			}
+		}
+		// Store data and publish claim
+		slot->emplace(std::forward<Args>(args)...);
+		slot->seq_.store(pos + 1, std::memory_order_release);
+		return true;
+	}
+
 public:
-	bool consume(T& fill) {
+	/// Single Consumer (nothing else will advance head)
+	bool consume(T& fill)
+	requires single_reader<C>
+	{
+		// We are only consumer so can load relaxed
+		std::size_t pos = head_.load(std::memory_order_relaxed);
+		auto& slot = ring_buffer_[ring_buffer_.index(pos)];
+
+		if (const std::ptrdiff_t d = diff(slot.seq_.load(std::memory_order_acquire), pos + 1); d < 0) {
+			// Slot holds no published element (queue is empty) so fail
+			return false;
+		} else if (d > 0) {
+			assert(false); // "Consumer may never be lapped in SC flow"
+		}
+		// Advance head and claim the slot
+		head_.store(pos + 1, std::memory_order_release);
+		// Move element out of slot and reset it
+		fill = std::move(slot.value());
+		slot.destroy();
+		// Publish completion of slot transfer
+		slot.seq_.store(pos + ring_buffer_.capacity(), std::memory_order_release);
+		return true;
+	}
+
+	// Multi consumer may need to contend for the head
+	bool consume(T& fill) requires multi_reader<C> {
 		std::size_t pos = head_.load(std::memory_order_relaxed);
 		seq_slot<T> * slot;
 		// A slot is viable for consumption if its sequence is = head + 1
@@ -535,29 +366,13 @@ public:
 	}
 };
 
-/// Each Queue Algorithm must implement consume and produce methods
-template <typename Q, typename T, typename ...Args>
-concept bounded_queue_imp = requires(Q& q, T& out, Args&&...args) {
-	{q.consume(out)							}	-> std::same_as<bool>;
-	{q.produce(std::forward<Args>(args)...) }	-> std::same_as<bool>;
-};
+// Generalised implementation safe for all mpmc models and specialisations for more relaxed requirements e.g. spmc mpsc.
+template <typename T, concurrency C, size_t N> requires is_valid_model<C>
+struct queue_for { using type = bounded_queue_imp<T, C, N>; };
 
-// Policy selection: maps a concurrency model onto an algorithm.
-// Every specialisation exposes the chosen implementation as `type`.
-
-// Default choice is MPMC since it is the safest (covers SPMC and MPSC until
-// dedicated algorithms exist; add a specialisation below when they do)
-template <typename T, concurrency C, size_t N>
-struct queue_for { using type = bounded_mpmc_imp<T, N>; };
-
+/// Use override for SPSC type, as it does not need the overhead of maintaining another sequence counter
 template <typename T, size_t N>
-struct queue_for<T, concurrency::SPSC, N> { using type = bounded_spsc_imp<T, N>; };
-
-template <typename T, size_t N>
-struct queue_for<T, concurrency::SPMC, N> { using type = bounded_spmc_imp<T, N>; };
-
-template <typename T, size_t N>
-struct queue_for<T, concurrency::MPSC, N> { using type = bounded_mpsc_imp<T, N>; };
+struct queue_for<T, concurrency::swsr, N> { using type = bounded_spsc_imp<T, N>; };
 
 template <typename T, concurrency C, size_t N>
 using queue_t = queue_for<T, C, N>::type;
@@ -579,11 +394,11 @@ using queue_t = queue_for<T, C, N>::type;
  * bounded_queue<T, C>(N)	-> Runtime size enforcement over constructor
  */
 template <typename T, concurrency C, size_t N = std::dynamic_extent>
-	requires details::valid_concurrency_model<C> && details::valid_or_dynamic<N>
+	requires is_valid_model<C> && details::valid_or_dynamic<N>
+			&& (std::is_nothrow_move_constructible_v<T> || std::is_nothrow_move_assignable_v<T>)
 class bounded_queue : details::queue_t<T, C, N> {
 	// Inherited Based Queue Type implementing the consumer producer algo
 	using queue_t = details::queue_t<T, C, N>;
-	static_assert(details::bounded_queue_imp<queue_t, T, const T&>, "Selected queue algorithm is invalid");
 
 	using queue_t::consume;
 	using queue_t::produce;
@@ -598,6 +413,7 @@ public:
 
 	/// Concurrency Model of Queue
 	static constexpr concurrency model = C;
+	static constexpr concurrency concurrency_guarantee = C;
 	static constexpr bool		 lock_free = true;
 	static constexpr bool		 thread_safe = true;
 
@@ -622,8 +438,17 @@ public:
 	 */
 	bool pop(T& fill) { return consume(fill); }
 
+	/** @return The moved front element, or void if queue is empty */
+	std::expected<T, void> e_pop()
+	requires std::is_default_constructible_v<T> {
+		if (T fill{}; pop(fill)) {
+			return fill;
+		}
+		return std::unexpected<std::expected<T, void>>{};
+	}
+
 	/** @return The moved front element, or std::nullopt if the queue is empty. */
-	std::optional<T> try_pop()
+	std::optional<T> t_pop()
 	requires std::is_default_constructible_v<T>
 	{
 		if (T fill{}; pop(fill)) {
@@ -651,7 +476,7 @@ public:
 	template <typename Function>
 	requires std::is_invocable_v<Function, T>
 	bool consume_one(Function&& fn) {
-		const auto consumed = try_pop();
+		const auto consumed = t_pop();
 		if (!consumed.has_value()) return false;
 		std::invoke(std::forward<Function>(fn), std::move(consumed.value()));
 		return true;
@@ -669,7 +494,7 @@ public:
 	std::size_t consume_all_available(Function&& fn) {
 		std::size_t num_processed = 0;
 		for (;;) {
-			std::optional<T> consumed = try_pop();
+			std::optional<T> consumed = t_pop();
 			// if consumed is empty we are done
 			if (!consumed) break;
 			std::invoke(fn, std::move(consumed.value()));
@@ -697,16 +522,16 @@ public:
 
 // Convenient Type Aliases
 template <typename T, std::size_t N = std::dynamic_extent>
-using b_spsc_q = bounded_queue<T, concurrency::SPSC, N>;
+using b_spsc_q = bounded_queue<T, concurrency::swsr, N>;
 
 template <typename T, std::size_t N = std::dynamic_extent>
-using b_spmc_q = bounded_queue<T, concurrency::SPMC, N>;
+using b_spmc_q = bounded_queue<T, concurrency::swmr, N>;
 
 template <typename T, std::size_t N = std::dynamic_extent>
-using b_mpsc_q = bounded_queue<T, concurrency::MPSC, N>;
+using b_mpsc_q = bounded_queue<T, concurrency::mwsr, N>;
 
 template <typename T, std::size_t N = std::dynamic_extent>
-using b_mpmc_q = bounded_queue<T, concurrency::MPMC, N>;
+using b_mpmc_q = bounded_queue<T, concurrency::mwmr, N>;
 
 template <typename Q, typename T>
 concept bounded_queue_like = requires (Q& q, const T& in, T& out) {

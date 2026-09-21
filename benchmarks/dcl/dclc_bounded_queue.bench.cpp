@@ -4,8 +4,11 @@
 // mix. Every point is registered for all four concurrency models in both their
 // compile-time sized and runtime sized form, over three payloads.
 //
-// Benchmarks are named "<workload>/<model>.<sizing>/<payload>/<capacity>", so a
-// slice can be picked out with e.g.
+// Benchmarks are named "<workload>/<model>.<sizing>/<payload>/<capacity>". The
+// second segment is the *subject* -- the thing being compared -- and everything
+// after it is the scenario it was measured in; the run ends with one comparison
+// table per scenario, built from exactly that split. A slice can be picked out
+// with e.g.
 //   ./dcl_benchmarks --benchmark_filter='Throughput/mpmc\.'
 //   ./dcl_benchmarks --benchmark_filter='/string/'
 //
@@ -94,14 +97,14 @@ struct complex_payload {
 
 enum class sizing : std::uint8_t { fixed, dynamic };
 
-constexpr const char *sizing_name(const sizing s) { return s == sizing::fixed ? "fixed" : "dynamic"; }
+constexpr const char *sizing_name(const sizing s) { return s == sizing::fixed ? "fixed" : "dyn"; }
 
 constexpr const char *model_name(const concurrency c) {
     switch (c) {
-        case concurrency::SPSC: return "spsc";
-        case concurrency::SPMC: return "spmc";
-        case concurrency::MPSC: return "mpsc";
-        case concurrency::MPMC: return "mpmc";
+        case concurrency::swsr: return "spsc";
+        case concurrency::swmr: return "spmc";
+        case concurrency::mwsr: return "mpsc";
+        case concurrency::mwmr: return "mpmc";
         default: return "unknown";
     }
 }
@@ -356,7 +359,7 @@ void BM_Throughput(benchmark::State &state) {
 
 // -- Argument sets -----------------------------------------------------------
 
-using bench_ptr = benchmark::internal::Benchmark *;
+using bench_ptr = benchmark::Benchmark *;
 
 /// Elements produced and drained per BM_Throughput iteration.
 constexpr std::int64_t elements_per_run = 100'000;
@@ -378,8 +381,6 @@ void mpsc_shapes(const bench_ptr b) { throughput_args(b, {{1, 1}, {2, 1}, {4, 1}
 void spmc_shapes(const bench_ptr b) { throughput_args(b, {{1, 1}, {1, 2}, {1, 4}, {1, 8}}); }
 void mpmc_shapes(const bench_ptr b) { throughput_args(b, {{1, 1}, {2, 2}, {4, 4}, {8, 8}, {4, 1}, {1, 4}}); }
 
-// -- Registration ------------------------------------------------------------
-
 #define DSL_BQ_TYPE(Payload, Model, Sizing, Capacity)                                    \
     dcl::bench::queue_under_test<dcl::bench::Payload, dcl::concurrency::Model,           \
                                  dcl::bench::sizing::Sizing, Capacity>
@@ -391,45 +392,78 @@ void mpmc_shapes(const bench_ptr b) { throughput_args(b, {{1, 1}, {2, 2}, {4, 4}
         ->Name(dcl::bench::bench_name<DSL_BQ_TYPE(Payload, Model, Sizing, Capacity)>(#Workload))   \
             Options;
 
-/// Both sizings of one model.
-#define DSL_BQ_SIZINGS(Workload, Payload, Model, Capacity, Options)          \
-    DSL_BQ_ONE(Workload, Payload, Model, fixed, Capacity, Options)           \
-    DSL_BQ_ONE(Workload, Payload, Model, dynamic, Capacity, Options)
+/// Every model, for one payload and sizing -- the comparison the output is for.
+#define DSL_BQ_MODELS(Workload, Payload, Sizing, Capacity, Options)        \
+    DSL_BQ_ONE(Workload, Payload, swsr, Sizing, Capacity, Options)         \
+    DSL_BQ_ONE(Workload, Payload, swmr, Sizing, Capacity, Options)         \
+    DSL_BQ_ONE(Workload, Payload, mwsr, Sizing, Capacity, Options)         \
+    DSL_BQ_ONE(Workload, Payload, mwmr, Sizing, Capacity, Options)
 
-/// Every payload, for one model.
-#define DSL_BQ_PAYLOADS(Workload, Model, Capacity, Options)                   \
-    DSL_BQ_SIZINGS(Workload, int_payload, Model, Capacity, Options)           \
-    DSL_BQ_SIZINGS(Workload, string_payload, Model, Capacity, Options)        \
-    DSL_BQ_SIZINGS(Workload, complex_payload, Model, Capacity, Options)
+/// Both sizings of every model. The compile-time sized set comes first, so it
+/// supplies the baseline each ratio is quoted against.
+#define DSL_BQ_SIZINGS(Workload, Payload, Capacity, Options)               \
+    DSL_BQ_MODELS(Workload, Payload, fixed, Capacity, Options)             \
+    DSL_BQ_MODELS(Workload, Payload, dynamic, Capacity, Options)
 
-/// Every model, every sizing, every payload.
-#define DSL_BQ_ALL(Workload, Capacity, Options)               \
-    DSL_BQ_PAYLOADS(Workload, SPSC, Capacity, Options)        \
-    DSL_BQ_PAYLOADS(Workload, SPMC, Capacity, Options)        \
-    DSL_BQ_PAYLOADS(Workload, MPSC, Capacity, Options)        \
-    DSL_BQ_PAYLOADS(Workload, MPMC, Capacity, Options)
+/// Every payload, every sizing, every model.
+#define DSL_BQ_ALL(Workload, Capacity, Options)                            \
+    DSL_BQ_SIZINGS(Workload, int_payload, Capacity, Options)               \
+    DSL_BQ_SIZINGS(Workload, string_payload, Capacity, Options)            \
+    DSL_BQ_SIZINGS(Workload, complex_payload, Capacity, Options)
+
+/// A `fill_pct` sweep, one registration per point.
+#define DSL_BQ_OCCUPANCY(Workload, Capacity, Fill)                         \
+    DSL_BQ_ALL(Workload, Capacity, ->ArgName("fill_pct")->Arg(Fill)->MinWarmUpTime(0.5))
 
 // Filling from new and from half full; draining a full and a half-full queue.
-DSL_BQ_ALL(BM_Fill, 1024, ->ArgName("fill_pct")->Arg(0)->Arg(50)->MinWarmUpTime(0.5))
-DSL_BQ_ALL(BM_Drain, 1024, ->ArgName("fill_pct")->Arg(100)->Arg(50)->MinWarmUpTime(0.5))
+DSL_BQ_OCCUPANCY(BM_Fill, 1024, 0)
+DSL_BQ_OCCUPANCY(BM_Fill, 1024, 50)
+DSL_BQ_OCCUPANCY(BM_Drain, 1024, 100)
+DSL_BQ_OCCUPANCY(BM_Drain, 1024, 50)
 
 // The bulk sweep, over three capacities: in cache, around the L2 boundary, and
 // beyond it.
-DSL_BQ_ALL(BM_FillAndDrain, 64, ->ArgName("fill_pct")->Arg(0)->MinWarmUpTime(0.5))
-DSL_BQ_ALL(BM_FillAndDrain, 1024, ->ArgName("fill_pct")->Arg(0)->Arg(50)->MinWarmUpTime(0.5))
-DSL_BQ_ALL(BM_FillAndDrain, 16384, ->ArgName("fill_pct")->Arg(0)->MinWarmUpTime(0.5))
+DSL_BQ_OCCUPANCY(BM_FillAndDrain, 64, 0)
+DSL_BQ_OCCUPANCY(BM_FillAndDrain, 1024, 0)
+DSL_BQ_OCCUPANCY(BM_FillAndDrain, 1024, 50)
+DSL_BQ_OCCUPANCY(BM_FillAndDrain, 16384, 0)
 
 // Steady state at an empty, a half full, and a full queue.
-DSL_BQ_ALL(BM_PushPop, 1024, ->ArgName("fill_pct")->Arg(0)->Arg(50)->Arg(100)->MinWarmUpTime(0.5))
+DSL_BQ_OCCUPANCY(BM_PushPop, 1024, 0)
+DSL_BQ_OCCUPANCY(BM_PushPop, 1024, 50)
+DSL_BQ_OCCUPANCY(BM_PushPop, 1024, 100)
 
-DSL_BQ_PAYLOADS(BM_Throughput, SPSC, 1024, ->Apply(dcl::bench::spsc_shapes)->UseRealTime())
-DSL_BQ_PAYLOADS(BM_Throughput, SPMC, 1024, ->Apply(dcl::bench::spmc_shapes)->UseRealTime())
-DSL_BQ_PAYLOADS(BM_Throughput, MPSC, 1024, ->Apply(dcl::bench::mpsc_shapes)->UseRealTime())
-DSL_BQ_PAYLOADS(BM_Throughput, MPMC, 1024, ->Apply(dcl::bench::mpmc_shapes)->UseRealTime())
+/**
+ * Throughput under the thread shapes each model is meant to serve. The shapes
+ * differ per model, so unlike the workloads above this one cannot share a
+ * single options chain -- but every roster includes {1, 1}, so that scenario
+ * still lines all four models up in one table.
+ */
+#define DSL_BQ_THROUGHPUT_MODELS(Payload, Sizing, Capacity)                                              \
+    DSL_BQ_ONE(BM_Throughput, Payload, swsr, Sizing, Capacity, ->Apply(dcl::bench::spsc_shapes)->UseRealTime()) \
+    DSL_BQ_ONE(BM_Throughput, Payload, swmr, Sizing, Capacity, ->Apply(dcl::bench::spmc_shapes)->UseRealTime()) \
+    DSL_BQ_ONE(BM_Throughput, Payload, mwsr, Sizing, Capacity, ->Apply(dcl::bench::mpsc_shapes)->UseRealTime()) \
+    DSL_BQ_ONE(BM_Throughput, Payload, mwmr, Sizing, Capacity, ->Apply(dcl::bench::mpmc_shapes)->UseRealTime())
 
-// How much the ring size matters once several threads are contending for it.
-DSL_BQ_PAYLOADS(BM_Throughput, MPMC, 64, ->Apply(dcl::bench::mpmc_shapes)->UseRealTime())
-DSL_BQ_PAYLOADS(BM_Throughput, MPMC, 16384, ->Apply(dcl::bench::mpmc_shapes)->UseRealTime())
+#define DSL_BQ_THROUGHPUT(Payload, Capacity)               \
+    DSL_BQ_THROUGHPUT_MODELS(Payload, fixed, Capacity)     \
+    DSL_BQ_THROUGHPUT_MODELS(Payload, dynamic, Capacity)
+
+DSL_BQ_THROUGHPUT(int_payload, 1024)
+DSL_BQ_THROUGHPUT(string_payload, 1024)
+DSL_BQ_THROUGHPUT(complex_payload, 1024)
+
+/// How much the ring size matters once several threads are contending for it.
+#define DSL_BQ_THROUGHPUT_MPMC(Payload, Capacity)                                                        \
+    DSL_BQ_ONE(BM_Throughput, Payload, mwmr, fixed, Capacity, ->Apply(dcl::bench::mpmc_shapes)->UseRealTime()) \
+    DSL_BQ_ONE(BM_Throughput, Payload, mwmr, dynamic, Capacity, ->Apply(dcl::bench::mpmc_shapes)->UseRealTime())
+
+DSL_BQ_THROUGHPUT_MPMC(int_payload, 64)
+DSL_BQ_THROUGHPUT_MPMC(string_payload, 64)
+DSL_BQ_THROUGHPUT_MPMC(complex_payload, 64)
+DSL_BQ_THROUGHPUT_MPMC(int_payload, 16384)
+DSL_BQ_THROUGHPUT_MPMC(string_payload, 16384)
+DSL_BQ_THROUGHPUT_MPMC(complex_payload, 16384)
 
 } // namespace
 } // namespace dcl::bench

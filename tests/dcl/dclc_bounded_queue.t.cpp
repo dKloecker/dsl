@@ -61,7 +61,7 @@ TYPED_TEST(BoundedQueue, PopOnEmptyFailsAndLeavesTheArgumentUntouched) {
 
 TYPED_TEST(BoundedQueue, TryPopOnEmptyReturnsNullopt) {
     auto q = TypeParam::template make<int, 16>();
-    EXPECT_EQ(q->try_pop(), std::nullopt);
+    EXPECT_EQ(q->t_pop(), std::nullopt);
 }
 
 TYPED_TEST(BoundedQueue, QueueIsNotEmptyAfterPush) {
@@ -148,9 +148,9 @@ TYPED_TEST(BoundedQueue, TryPopReturnsTheOldestElement) {
     ASSERT_TRUE(q->push(1));
     ASSERT_TRUE(q->push(2));
 
-    EXPECT_EQ(q->try_pop(), 1);
-    EXPECT_EQ(q->try_pop(), 2);
-    EXPECT_EQ(q->try_pop(), std::nullopt);
+    EXPECT_EQ(q->t_pop(), 1);
+    EXPECT_EQ(q->t_pop(), 2);
+    EXPECT_EQ(q->t_pop(), std::nullopt);
 }
 
 TYPED_TEST(BoundedQueue, PushOfAnLvalueCopiesTheElement) {
@@ -429,7 +429,7 @@ TYPED_TEST(BoundedQueue, TryPopHandsOutTheOnlyLiveCopy) {
         }
         ASSERT_EQ(c.live(), 1);
 
-        auto popped = q->try_pop();
+        auto popped = q->t_pop();
         ASSERT_TRUE(popped.has_value());
         EXPECT_EQ(popped->value, 3);
         EXPECT_EQ(c.live(), 1) << "only the returned element should remain alive";

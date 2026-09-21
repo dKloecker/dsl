@@ -2,11 +2,7 @@
 // Created by Dominic Kloecker on 20/09/2026.
 //
 // Shared fixtures for the bounded queue comparison suites:
-//
-// Benchmarks are named "<workload>/<queue>/<payload>/<capacity>", so a single
-// implementation or workload can be picked out with e.g.
-//   ./dcl_benchmarks --benchmark_filter='PushPop/dsl\.'
-//
+
 #ifndef DSL_BENCHMARKS_DCLC_BOUNDED_QUEUE_BENCH_TYPES_H_
 #define DSL_BENCHMARKS_DCLC_BOUNDED_QUEUE_BENCH_TYPES_H_
 
@@ -184,6 +180,15 @@ std::string bench_name(const std::string_view workload) {
 } // namespace dcl::bench
 
 /// Register
+///
+/// The rosters below are ordered so that the *subject* -- the queue being
+/// compared -- varies fastest, and the payload varies slowest. Consecutive
+/// rows are therefore the thing you want side by side, and the comparison
+/// reporter groups them into one table per payload.
+///
+/// Within a roster the order is: the dedicated algorithm for the shape first
+/// (it is the baseline every ratio is quoted against), then the more general
+/// dsl queues, then the same set runtime-sized, then boost::lockfree.
 
 /**
  * Registers one (workload, queue, payload, capacity) point. `Options` is a chain
@@ -195,54 +200,66 @@ std::string bench_name(const std::string_view workload) {
         ->Name(dcl::bench::bench_name<Adapter<Payload, Capacity>>(#Workload)) \
             Options;
 
-/// One queue, every payload.
-#define DSL_BENCH_PAYLOADS(Workload, Adapter, Capacity, Options)                  \
-    DSL_BENCH_ONE(Workload, Adapter, dcl::bench::SimpleObject, Capacity, Options) \
-    DSL_BENCH_ONE(Workload, Adapter, dcl::bench::ComplexObject, Capacity, Options)
-
 /**
- * Every queue that can be driven by one producer and one consumer  which is
+ * Every queue that can be driven by one producer and one consumer -- which is
  * every queue here, so this list doubles as the roster. Add a queue here first.
  */
-#define DSL_BENCH_ALL_SPSC(Workload, Capacity, Options)                           \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spsc_fixed, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spsc_dyn, Capacity, Options)     \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spmc_fixed, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spmc_dyn, Capacity, Options)     \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpsc_fixed, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpsc_dyn, Capacity, Options)     \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_fixed, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_dyn, Capacity, Options)     \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_spsc_fixed, Capacity, Options) \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_spsc_dyn, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_mpmc, Capacity, Options)
+#define DSL_BENCH_SPSC_SUBJECTS(Workload, Payload, Capacity, Options)           \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_spsc_fixed, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_spmc_fixed, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpsc_fixed, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpmc_fixed, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_spsc_dyn, Payload, Capacity, Options)     \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_spmc_dyn, Payload, Capacity, Options)     \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpsc_dyn, Payload, Capacity, Options)     \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpmc_dyn, Payload, Capacity, Options)     \
+    DSL_BENCH_ONE(Workload, dcl::bench::boost_spsc_fixed, Payload, Capacity, Options) \
+    DSL_BENCH_ONE(Workload, dcl::bench::boost_spsc_dyn, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::boost_mpmc, Payload, Capacity, Options)
 
 /**
  * Every queue that tolerates several producers against a single consumer: the
  * dedicated MPSC algorithm, and the MPMC ones that also cover the shape.
  */
-#define DSL_BENCH_ALL_MPSC(Workload, Capacity, Options)                         \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpsc_fixed, Capacity, Options) \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpsc_dyn, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_fixed, Capacity, Options) \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_dyn, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_mpmc, Capacity, Options)
+#define DSL_BENCH_MPSC_SUBJECTS(Workload, Payload, Capacity, Options)         \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpsc_fixed, Payload, Capacity, Options) \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpmc_fixed, Payload, Capacity, Options) \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpsc_dyn, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpmc_dyn, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::boost_mpmc, Payload, Capacity, Options)
 
 /**
  * Every queue that tolerates a single producer against several consumers: the
  * dedicated SPMC algorithm, and the MPMC ones that also cover the shape.
  */
-#define DSL_BENCH_ALL_SPMC(Workload, Capacity, Options)                         \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spmc_fixed, Capacity, Options) \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_spmc_dyn, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_fixed, Capacity, Options) \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_dyn, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_mpmc, Capacity, Options)
+#define DSL_BENCH_SPMC_SUBJECTS(Workload, Payload, Capacity, Options)         \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_spmc_fixed, Payload, Capacity, Options) \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpmc_fixed, Payload, Capacity, Options) \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_spmc_dyn, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpmc_dyn, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::boost_mpmc, Payload, Capacity, Options)
 
 /// Every queue that tolerates several producers *and* several consumers.
-#define DSL_BENCH_ALL_MPMC(Workload, Capacity, Options)                         \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_fixed, Capacity, Options) \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::dsl_mpmc_dyn, Capacity, Options)   \
-    DSL_BENCH_PAYLOADS(Workload, dcl::bench::boost_mpmc, Capacity, Options)
+#define DSL_BENCH_MPMC_SUBJECTS(Workload, Payload, Capacity, Options)         \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpmc_fixed, Payload, Capacity, Options) \
+    DSL_BENCH_ONE(Workload, dcl::bench::dsl_mpmc_dyn, Payload, Capacity, Options)   \
+    DSL_BENCH_ONE(Workload, dcl::bench::boost_mpmc, Payload, Capacity, Options)
+
+/// One roster, over every payload. These are what the workloads register with.
+#define DSL_BENCH_ALL_SPSC(Workload, Capacity, Options)                                  \
+    DSL_BENCH_SPSC_SUBJECTS(Workload, dcl::bench::SimpleObject, Capacity, Options)       \
+    DSL_BENCH_SPSC_SUBJECTS(Workload, dcl::bench::ComplexObject, Capacity, Options)
+
+#define DSL_BENCH_ALL_MPSC(Workload, Capacity, Options)                                  \
+    DSL_BENCH_MPSC_SUBJECTS(Workload, dcl::bench::SimpleObject, Capacity, Options)       \
+    DSL_BENCH_MPSC_SUBJECTS(Workload, dcl::bench::ComplexObject, Capacity, Options)
+
+#define DSL_BENCH_ALL_SPMC(Workload, Capacity, Options)                                  \
+    DSL_BENCH_SPMC_SUBJECTS(Workload, dcl::bench::SimpleObject, Capacity, Options)       \
+    DSL_BENCH_SPMC_SUBJECTS(Workload, dcl::bench::ComplexObject, Capacity, Options)
+
+#define DSL_BENCH_ALL_MPMC(Workload, Capacity, Options)                                  \
+    DSL_BENCH_MPMC_SUBJECTS(Workload, dcl::bench::SimpleObject, Capacity, Options)       \
+    DSL_BENCH_MPMC_SUBJECTS(Workload, dcl::bench::ComplexObject, Capacity, Options)
 
 #endif // DSL_BENCHMARKS_DCLC_BOUNDED_QUEUE_BENCH_TYPES_H_

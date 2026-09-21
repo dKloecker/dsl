@@ -6,6 +6,8 @@
 #define DSL_DSLU_CONCEPTS_H_
 
 #include <functional>
+#include <limits>
+#include <span>
 
 namespace dsl {
 template<typename T>
@@ -34,6 +36,9 @@ concept is_power_of_v = is_power_of<Base>(Val);
 template<typename T, size_t P>
 concept container_supports_precision =
 	(P <= static_cast<std::size_t>(std::numeric_limits<T>::digits10));
+
+template <const std::size_t N>
+concept is_dynamic_extend = N == std::dynamic_extent;
 
 };
 

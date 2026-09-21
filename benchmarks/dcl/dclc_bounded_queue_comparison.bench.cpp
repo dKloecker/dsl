@@ -23,7 +23,7 @@ auto make_queue() { return std::make_unique<Adapter>(); }
 /// indices stay hot in the same core's cache, so this isolates the per-operation
 /// bookkeeping (index arithmetic, sequence counters, element copy).
 template<bench_queue Adapter>
-void BM_PushPop(benchmark::State &state) {
+void BM_Vs_PushPop(benchmark::State &state) {
     constexpr std::size_t batch = 10'000;
 
     auto                         q = make_queue<Adapter>();
@@ -39,12 +39,12 @@ void BM_PushPop(benchmark::State &state) {
     state.SetItemsProcessed(static_cast<std::int64_t>(state.iterations() * batch));
 }
 
-DSL_BENCH_ALL_SPSC(BM_PushPop, 1024, ->MinWarmUpTime(1.0))
+DSL_BENCH_ALL_SPSC(BM_Vs_PushPop, 1024, ->MinWarmUpTime(1.0))
 
 /// The same alternation, but with the queue held one element short of full, so
 /// every push lands on the slot a pop has just released.
 template<bench_queue Adapter>
-void BM_PushPopNearFull(benchmark::State &state) {
+void BM_Vs_PushPopNearFull(benchmark::State &state) {
     constexpr std::size_t batch = 10'000;
 
     auto q = make_queue<Adapter>();
@@ -63,14 +63,14 @@ void BM_PushPopNearFull(benchmark::State &state) {
     state.SetItemsProcessed(static_cast<std::int64_t>(state.iterations() * batch));
 }
 
-DSL_BENCH_ALL_SPSC(BM_PushPopNearFull, 1024, ->MinWarmUpTime(1.0))
+DSL_BENCH_ALL_SPSC(BM_Vs_PushPopNearFull, 1024, ->MinWarmUpTime(1.0))
 
 /// Fill the queue to rejection, then drain it to empty: a full sweep of the ring
 /// per iteration, so this is the streaming/bulk-transfer cost rather than the
 /// single-slot cost. Items are counted rather than derived from the requested
 /// capacity, because not every queue makes all of its slots usable.
 template<bench_queue Adapter>
-void BM_FillAndDrain(benchmark::State &state) {
+void BM_Vs_FillAndDrain(benchmark::State &state) {
     auto          q     = make_queue<Adapter>();
     std::uint64_t items = 0;
 
@@ -84,7 +84,7 @@ void BM_FillAndDrain(benchmark::State &state) {
     state.SetItemsProcessed(static_cast<std::int64_t>(items));
 }
 
-DSL_BENCH_ALL_SPSC(BM_FillAndDrain, 8192, ->MinWarmUpTime(1.0))
+DSL_BENCH_ALL_SPSC(BM_Vs_FillAndDrain, 8192, ->MinWarmUpTime(1.0))
 
 // -- One producer, one consumer, two threads ---------------------------------
 
@@ -93,7 +93,7 @@ DSL_BENCH_ALL_SPSC(BM_FillAndDrain, 8192, ->MinWarmUpTime(1.0))
 /// head and tail counters live in different caches, so it exposes the false
 /// sharing and memory-ordering costs the single-threaded workloads hide.
 template<bench_queue Adapter>
-void BM_ProducerConsumer(benchmark::State &state) {
+void BM_Vs_ProducerConsumer(benchmark::State &state) {
     auto             q = make_queue<Adapter>();
     std::atomic_bool done{false};
 
@@ -117,7 +117,7 @@ void BM_ProducerConsumer(benchmark::State &state) {
     state.SetItemsProcessed(static_cast<std::int64_t>(pushed));
 }
 
-DSL_BENCH_ALL_SPSC(BM_ProducerConsumer, 1024, ->MinWarmUpTime(0.5)->UseRealTime())
+DSL_BENCH_ALL_SPSC(BM_Vs_ProducerConsumer, 1024, ->MinWarmUpTime(0.5)->UseRealTime())
 
 } // namespace
 } // namespace dcl::bench

@@ -175,35 +175,35 @@ struct dynamic_capacity {
     static auto make() { return std::make_unique<queue<T, Capacity>>(Capacity); }
 };
 
-struct spsc_fixed_tag : fixed_capacity<concurrency::SPSC> {
+struct spsc_fixed_tag : fixed_capacity<concurrency::swsr> {
     static constexpr const char *name = "spsc_fixed";
 };
 
-struct spsc_dyn_tag : dynamic_capacity<concurrency::SPSC> {
+struct spsc_dyn_tag : dynamic_capacity<concurrency::swsr> {
     static constexpr const char *name = "spsc_dyn";
 };
 
-struct spmc_fixed_tag : fixed_capacity<concurrency::SPMC> {
+struct spmc_fixed_tag : fixed_capacity<concurrency::swmr> {
     static constexpr const char *name = "spmc_fixed";
 };
 
-struct spmc_dyn_tag : dynamic_capacity<concurrency::SPMC> {
+struct spmc_dyn_tag : dynamic_capacity<concurrency::swmr> {
     static constexpr const char *name = "spmc_dyn";
 };
 
-struct mpsc_fixed_tag : fixed_capacity<concurrency::MPSC> {
+struct mpsc_fixed_tag : fixed_capacity<concurrency::mwsr> {
     static constexpr const char *name = "mpsc_fixed";
 };
 
-struct mpsc_dyn_tag : dynamic_capacity<concurrency::MPSC> {
+struct mpsc_dyn_tag : dynamic_capacity<concurrency::mwsr> {
     static constexpr const char *name = "mpsc_dyn";
 };
 
-struct mpmc_fixed_tag : fixed_capacity<concurrency::MPMC> {
+struct mpmc_fixed_tag : fixed_capacity<concurrency::mwmr> {
     static constexpr const char *name = "mpmc_fixed";
 };
 
-struct mpmc_dyn_tag : dynamic_capacity<concurrency::MPMC> {
+struct mpmc_dyn_tag : dynamic_capacity<concurrency::mwmr> {
     static constexpr const char *name = "mpmc_dyn";
 };
 

@@ -32,7 +32,7 @@ namespace {
  * slots being released underneath, the head line bouncing between cores).
  */
 template<bench_queue Adapter>
-void BM_Contended(benchmark::State &state) {
+void BM_Vs_Contended(benchmark::State &state) {
     using value_type = typename Adapter::value_type;
 
     const auto producers = static_cast<std::size_t>(state.range(0));
@@ -74,18 +74,27 @@ void BM_Contended(benchmark::State &state) {
     state.SetItemsProcessed(static_cast<std::int64_t>(pushed));
 }
 
-// Many producers, one consumer
-DSL_BENCH_ALL_MPSC(BM_Contended, 1024,
-                   ->Args({2, 1})->Args({4, 1})->UseRealTime()->MinWarmUpTime(0.2))
 
-// One producer, many consume
-DSL_BENCH_ALL_SPMC(BM_Contended, 1024,
-                   ->Args({1, 2})->Args({1, 4})->UseRealTime()->MinWarmUpTime(0.2))
+#define DSL_CONTENDED_SHAPE(Roster, Producers, Consumers)                  \
+    Roster(BM_Vs_Contended, 1024,                                          \
+           ->ArgNames({"producers", "consumers"})                          \
+               ->Args({Producers, Consumers})                              \
+                   ->UseRealTime()                                         \
+                       ->MinWarmUpTime(0.2))
+
+// Many producers, one consumer
+DSL_CONTENDED_SHAPE(DSL_BENCH_ALL_MPSC, 2, 1)
+DSL_CONTENDED_SHAPE(DSL_BENCH_ALL_MPSC, 4, 1)
+
+// One producer, many consumers
+DSL_CONTENDED_SHAPE(DSL_BENCH_ALL_SPMC, 1, 2)
+DSL_CONTENDED_SHAPE(DSL_BENCH_ALL_SPMC, 1, 4)
 
 // Symmetric contention, including {1, 1} so the price of the multi-producer
 // algorithm at zero contention is visible next to the SPSC numbers.
-DSL_BENCH_ALL_MPMC(BM_Contended, 1024,
-                   ->Args({1, 1})->Args({2, 2})->Args({4, 4})->UseRealTime()->MinWarmUpTime(0.2))
+DSL_CONTENDED_SHAPE(DSL_BENCH_ALL_MPMC, 1, 1)
+DSL_CONTENDED_SHAPE(DSL_BENCH_ALL_MPMC, 2, 2)
+DSL_CONTENDED_SHAPE(DSL_BENCH_ALL_MPMC, 4, 4)
 
 } // namespace
 } // namespace dcl::bench
