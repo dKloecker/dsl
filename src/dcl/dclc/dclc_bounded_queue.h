@@ -122,6 +122,10 @@ protected:
 	// Protected (not private) so the concrete algorithms deriving from this can reach them
 	alignas(cache_line) std::atomic_size_t		tail_{0};
 	alignas(cache_line) std::atomic_size_t		head_{0};
+
+	// Caches usable for non single read / writer modes where we know no other thread can modify
+	alignas(cache_line) std::size_t				tail_cache{0};
+	alignas(cache_line) std::size_t				head_cache{0};
 	// Ensure alignment of ring buffer slot in case element is aligned over cache_line.
 	alignas(std::max(cache_line, alignof(ring_buffer<Slot, N>))) ring_buffer<Slot, N> ring_buffer_;
 	// cha
@@ -178,6 +182,10 @@ class bounded_spsc_imp : public queue_base<byte_slot<T>, N> {
 	// Bring dependent base members into scope
 	using base::tail_;
 	using base::head_;
+
+	using base::tail_cache;
+	using base::head_cache;
+
 	using base::ring_buffer_;
 public:
 	// Inherit base constructor (for dynamic size)
@@ -186,27 +194,28 @@ public:
 	// single writer single reader safe
 	static constexpr auto concurrency_guarantee = concurrency::swsr;
 
+	// Since we have single producer and single consumer, both producer and consumer can read their positions via the
+	// non atomic cached values instead of having to go via the atomic read.
+
 	template <typename ...Args>
 	bool produce(Args&&...args) {
-		const size_t curr = tail_.load(std::memory_order::relaxed);
 		// if tail is ahead of head by capacity then queue is full and we cannot produce
-		if (curr - head_.load(std::memory_order_acquire)
+		if (tail_cache - head_.load(std::memory_order_acquire)
 			>= ring_buffer_.capacity()) return false;
 		// else place value in slot
-		ring_buffer_[ring_buffer_.index(curr)].emplace(std::forward<Args>(args)...);
-		tail_.store(curr + 1, std::memory_order_release);
+		ring_buffer_[ring_buffer_.index(tail_cache)].emplace(std::forward<Args>(args)...);
+		tail_.store(++tail_cache, std::memory_order_release);
 		return true;
 	}
 
 	bool consume(T& fill) {
-		const size_t curr = head_.load(std::memory_order_relaxed);
 		// if head sits on top of the tail then the queue is empty and we cannot consume
-		if (tail_.load(std::memory_order_acquire) - curr == 0) return false;
+		if (tail_.load(std::memory_order_acquire) - head_cache == 0) return false;
 		// else move value from slot into provided element and destroy the moved element
-		auto & slot = ring_buffer_[ring_buffer_.index(curr)];
+		auto & slot = ring_buffer_[ring_buffer_.index(head_cache)];
 		fill = std::move(slot.value());
 		slot.destroy();
-		head_.store(curr + 1, std::memory_order_release);
+		head_.store(++head_cache, std::memory_order_release);
 		return true;
 	}
 };
@@ -216,6 +225,9 @@ public:
  * Internally chooses between the appropriate consume / produce algorithm
  * based on the provided concurrency requirement
  * (e.g. slightly more relaxed produce / consume versions when possible)
+ *
+ * single consumer and single producer implementations each read via non atomic value
+ * since they are the only thread writing onto it but will publish their result via the atomic
  */
 template <typename T, concurrency C, size_t N>
 class bounded_queue_imp: public queue_base<seq_slot<T>, N> {
@@ -223,6 +235,9 @@ class bounded_queue_imp: public queue_base<seq_slot<T>, N> {
 	// Bring dependent base members into scope
 	using base::tail_;
 	using base::head_;
+	using base::head_cache;
+	using base::tail_cache;
+
 	using base::ring_buffer_;
 
 	void init_slot_sequence() {
@@ -264,24 +279,23 @@ private:
 	template <typename ...Args>
 	requires std::is_nothrow_constructible_v<T, Args...> && single_writer<C>
 	bool claim_and_emplace(Args&&...args) {
-		// Only producer so can be relaxed
-		size_t pos = tail_.load(std::memory_order_relaxed);
-		auto& slot = ring_buffer_[ring_buffer_.index(pos)];
+		auto& slot = ring_buffer_[ring_buffer_.index(tail_cache)];
 
-		if (const std::ptrdiff_t d = diff(slot.seq_.load(std::memory_order_acquire), pos); d < 0) {
+		if (const std::ptrdiff_t d = diff(slot.seq_.load(std::memory_order_acquire), tail_cache); d < 0) {
 			// Slot still contains elements from last lap not yet drained (queue is full)
 			return false;
 		} else if (d > 0) {
 			assert(false); // Should never be lapped in SP context
 		}
-		tail_.store(pos + 1, std::memory_order_release);
+		++tail_cache; // advance and publish
+		tail_.store(tail_cache, std::memory_order_release);
 		// Store data and publish claim
 		slot.emplace(std::forward<Args>(args)...);
-		slot.seq_.store(pos + 1, std::memory_order_release);
+		slot.seq_.store(tail_cache, std::memory_order_release);
 		return true;
 	}
 
-	/// Multi Ponsumer (other threads may try to claim tail so we need to contend for it)
+	/// Multi Consumer (other threads may try to claim tail so we need to contend for it)
 	template <typename ...Args>
 	requires std::is_nothrow_constructible_v<T, Args...> && multi_writer<C>
 	bool claim_and_emplace(Args&&...args) {
@@ -317,23 +331,20 @@ public:
 	bool consume(T& fill)
 	requires single_reader<C>
 	{
-		// We are only consumer so can load relaxed
-		std::size_t pos = head_.load(std::memory_order_relaxed);
-		auto& slot = ring_buffer_[ring_buffer_.index(pos)];
-
-		if (const std::ptrdiff_t d = diff(slot.seq_.load(std::memory_order_acquire), pos + 1); d < 0) {
+		auto& slot = ring_buffer_[ring_buffer_.index(head_cache)];
+		if (const std::ptrdiff_t d = diff(slot.seq_.load(std::memory_order_acquire), head_cache + 1); d < 0) {
 			// Slot holds no published element (queue is empty) so fail
 			return false;
 		} else if (d > 0) {
 			assert(false); // "Consumer may never be lapped in SC flow"
 		}
 		// Advance head and claim the slot
-		head_.store(pos + 1, std::memory_order_release);
+		head_.store(head_cache + 1, std::memory_order_release);
 		// Move element out of slot and reset it
 		fill = std::move(slot.value());
 		slot.destroy();
 		// Publish completion of slot transfer
-		slot.seq_.store(pos + ring_buffer_.capacity(), std::memory_order_release);
+		slot.seq_.store(head_cache++ + ring_buffer_.capacity(), std::memory_order_release);
 		return true;
 	}
 
